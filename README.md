@@ -92,7 +92,7 @@ JWT_ALGORITHM=HS256
 JWT_EXPIRE_MINUTES=1440
 
 DEEPSEEK_API_KEY=sk-your-deepseek-api-key
-DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+DEEPSEEK_BASE_URL=https://api.deepseek.com
 
 UPLOAD_DIR=static/products
 MAX_UPLOAD_SIZE=2097152
