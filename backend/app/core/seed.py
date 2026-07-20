@@ -51,16 +51,16 @@ def seed(db: Session):
     # === 商品 ===
     if db.query(Product).count() == 0:
         products = [
-            Product(name="iPhone 15 Pro Max", description="256GB 原色钛金属 支持5G全网通 A17 Pro芯片", price=9999.00, stock=100, sales=256, category_id=6, images=[]),
-            Product(name="华为 Mate 60 Pro", description="12GB+512GB 雅丹黑 卫星通话 超可靠玄武架构", price=6999.00, stock=80, sales=189, category_id=6, images=[]),
-            Product(name="小米14 Ultra", description="16GB+512GB 专业影像 骁龙8Gen3", price=5999.00, stock=120, sales=145, category_id=6, images=[]),
-            Product(name="MacBook Pro 14英寸", description="M3 Pro芯片 18GB+512GB 深空黑色", price=14999.00, stock=50, sales=88, category_id=10, images=[]),
-            Product(name="联想 ThinkPad X1 Carbon", description="i7-1365U 16GB+512GB 商务旗舰笔记本", price=9999.00, stock=30, sales=42, category_id=10, images=[]),
-            Product(name="AirPods Pro 第二代", description="主动降噪 自适应音频 USB-C充电盒", price=1899.00, stock=200, sales=320, category_id=8, images=[]),
-            Product(name="索尼 WH-1000XM5 头戴式耳机", description="无线降噪 30小时续航 黑色", price=2499.00, stock=60, sales=67, category_id=8, images=[]),
-            Product(name="罗技 MX Master 3S 鼠标", description="无线蓝牙 8K DPI USB-C充电", price=699.00, stock=150, sales=234, category_id=12, images=[]),
-            Product(name="海尔 500升冰箱", description="风冷无霜 双变频 一级能效", price=3999.00, stock=25, sales=36, category_id=3, images=[]),
-            Product(name="Nike Air Max 270", description="男子运动鞋 气垫 黑白配色", price=1199.00, stock=90, sales=178, category_id=4, images=[]),
+            Product(name="iPhone 15 Pro Max", description="苹果智能手机 256GB 原色钛金属 支持5G全网通 A17 Pro芯片 高端旗舰手机", price=9999.00, stock=100, sales=256, category_id=6, images=[]),
+            Product(name="华为 Mate 60 Pro", description="华为智能手机 12GB+512GB 雅丹黑 卫星通话 超可靠玄武架构 国产旗舰手机", price=6999.00, stock=80, sales=189, category_id=6, images=[]),
+            Product(name="小米14 Ultra", description="小米智能手机 16GB+512GB 专业影像 骁龙8Gen3 徕卡光学 旗舰手机", price=5999.00, stock=120, sales=145, category_id=6, images=[]),
+            Product(name="MacBook Pro 14英寸", description="苹果笔记本电脑 M3 Pro芯片 18GB+512GB 深空黑色 高性能办公电脑", price=14999.00, stock=50, sales=88, category_id=10, images=[]),
+            Product(name="联想 ThinkPad X1 Carbon", description="联想笔记本电脑 i7-1365U 16GB+512GB 商务旗舰 轻薄便携电脑", price=9999.00, stock=30, sales=42, category_id=10, images=[]),
+            Product(name="AirPods Pro 第二代", description="苹果蓝牙耳机 主动降噪 自适应音频 USB-C充电盒 无线耳机", price=1899.00, stock=200, sales=320, category_id=8, images=[]),
+            Product(name="索尼 WH-1000XM5 头戴式耳机", description="索尼无线降噪头戴式耳机 30小时续航 黑色 高解析度音频", price=2499.00, stock=60, sales=67, category_id=8, images=[]),
+            Product(name="罗技 MX Master 3S 鼠标", description="罗技无线蓝牙鼠标 8K DPI USB-C充电 静音按键 办公游戏两用", price=699.00, stock=150, sales=234, category_id=12, images=[]),
+            Product(name="海尔 500升冰箱", description="海尔家用电器 500升冰箱 风冷无霜 双变频 一级能效 节能静音", price=3999.00, stock=25, sales=36, category_id=3, images=[]),
+            Product(name="Nike Air Max 270", description="Nike男子运动鞋 气垫 黑白配色 休闲百搭 透气舒适", price=1199.00, stock=90, sales=178, category_id=4, images=[]),
         ]
         db.add_all(products)
         db.commit()

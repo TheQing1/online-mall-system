@@ -17,10 +17,11 @@ def get_products(
     query = db.query(Product).filter(Product.status == ProductStatus.ON)
 
     if keyword:
-        query = query.filter(
+        query = query.outerjoin(Category, Product.category_id == Category.id).filter(
             or_(
                 Product.name.ilike(f"%{keyword}%"),
-                Product.description.ilike(f"%{keyword}%")
+                Product.description.ilike(f"%{keyword}%"),
+                Category.name.ilike(f"%{keyword}%"),
             )
         )
 
