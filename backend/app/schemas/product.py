@@ -1,5 +1,7 @@
+from __future__ import annotations
 from typing import Optional, List
-from pydantic import BaseModel
+from datetime import datetime
+from pydantic import BaseModel, field_serializer
 from decimal import Decimal
 
 class CategoryOut(BaseModel):
@@ -7,7 +9,7 @@ class CategoryOut(BaseModel):
     name: str
     parent_id: Optional[int] = None
     sort: int
-    children: List["CategoryOut"] = []
+    children: List[CategoryOut] = []
 
     class Config:
         from_attributes = True
@@ -27,6 +29,13 @@ class ProductOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+    @field_serializer("created_at")
+    @classmethod
+    def serialize_created_at(cls, v):
+        if isinstance(v, datetime):
+            return v.isoformat()
+        return str(v)
 
 class ProductCreate(BaseModel):
     name: str
