@@ -104,6 +104,17 @@ def seed(db: Session):
         db.commit()
         print(f"✅ 已创建 {len(knowledge_docs)} 个知识库文档")
 
+        # 同步向量索引
+        try:
+            from app.ai.loader import split_documents
+            from app.ai.vectorstore import rebuild_index
+            all_docs = db.query(KnowledgeDoc).all()
+            langchain_docs = split_documents(all_docs)
+            rebuild_index(langchain_docs)
+            print("✅ 已同步向量索引")
+        except Exception as e:
+            print(f"⚠️ 向量索引同步失败（AI 客服将不可用）: {e}")
+
 def main():
     # 确保表已创建
     Base.metadata.create_all(bind=engine)
