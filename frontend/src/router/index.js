@@ -15,7 +15,27 @@ const routes = [
     path: '/register',
     name: 'Register',
     component: () => import('@/views/Register.vue')
-  }
+  },
+  {
+    path: '/search',
+    name: 'Search',
+    component: () => import('@/views/ProductList.vue')
+  },
+  {
+    path: '/category/:id',
+    name: 'Category',
+    component: () => import('@/views/ProductList.vue')
+  },
+  {
+    path: '/product/:id',
+    name: 'ProductDetail',
+    component: () => import('@/views/ProductDetail.vue')
+  },
+  {
+    path: '/cart',
+    name: 'Cart',
+    component: () => import('@/views/Cart.vue')
+  },
 ]
 
 const router = createRouter({
