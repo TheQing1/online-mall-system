@@ -42,6 +42,7 @@ class ProductCreate(BaseModel):
     description: Optional[str] = None
     price: Decimal
     stock: int = 0
+    images: List[str] = []
     category_id: Optional[int] = None
     status: str = "on"
 
@@ -50,6 +51,7 @@ class ProductUpdate(BaseModel):
     description: Optional[str] = None
     price: Optional[Decimal] = None
     stock: Optional[int] = None
+    images: Optional[List[str]] = None
     category_id: Optional[int] = None
     status: Optional[str] = None
 
