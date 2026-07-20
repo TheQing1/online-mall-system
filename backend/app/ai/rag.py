@@ -10,7 +10,7 @@ def get_llm() -> ChatOpenAI:
     if not settings.deepseek_api_key or settings.deepseek_api_key == "your-deepseek-api-key":
         raise ValueError("请在 .env 中配置 DEEPSEEK_API_KEY")
     return ChatOpenAI(
-        model="deepseek-chat",
+        model="deepseek-v4-flash",
         api_key=settings.deepseek_api_key,
         base_url=settings.deepseek_base_url,
         streaming=True,
