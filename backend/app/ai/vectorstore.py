@@ -56,10 +56,20 @@ def rebuild_index(documents):
 
 def search_similar(query: str, k: int = 3):
     """相似度检索，返回 (Document, score) 列表"""
+    import traceback
     vectorstore = get_vectorstore()
-    # 先检查是否有数据
+    try:
+        count = vectorstore._collection.count()
+        print(f"[向量检索] 索引中文档数: {count}")
+    except Exception:
+        print("[向量检索] 无法获取索引文档数")
     try:
         results = vectorstore.similarity_search_with_score(query, k=k)
+        print(f"[向量检索] 查询 '{query[:30]}...' 返回 {len(results)} 条结果")
+        for doc, score in results:
+            print(f"  - score={score:.4f} title={doc.metadata.get('title', '?')}")
         return results
-    except Exception:
+    except Exception as e:
+        traceback.print_exc()
+        print(f"[向量检索] 失败: {e}")
         return []
