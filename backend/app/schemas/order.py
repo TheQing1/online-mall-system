@@ -1,5 +1,7 @@
+from __future__ import annotations
 from typing import Optional, List
-from pydantic import BaseModel
+from datetime import datetime
+from pydantic import BaseModel, field_serializer
 from decimal import Decimal
 
 class OrderItemOut(BaseModel):
@@ -25,6 +27,13 @@ class OrderOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+    @field_serializer("created_at")
+    @classmethod
+    def serialize_created_at(cls, v):
+        if isinstance(v, datetime):
+            return v.isoformat()
+        return str(v)
 
 class OrderCreate(BaseModel):
     address_id: int

@@ -1,5 +1,6 @@
 from typing import Optional
-from pydantic import BaseModel
+from datetime import datetime
+from pydantic import BaseModel, field_serializer
 
 class KnowledgeDocCreate(BaseModel):
     title: str
@@ -20,3 +21,10 @@ class KnowledgeDocOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+    @field_serializer("created_at")
+    @classmethod
+    def serialize_created_at(cls, v):
+        if isinstance(v, datetime):
+            return v.isoformat()
+        return str(v)
