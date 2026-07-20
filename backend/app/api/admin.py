@@ -178,10 +178,15 @@ async def upload_image(file: UploadFile = File(...), admin = Depends(get_current
 
 def _sync_knowledge_index(db: Session):
     """同步知识库到向量索引"""
+    import traceback
     try:
         docs = db.query(KnowledgeDoc).all()
+        print(f"[知识库同步] 共 {len(docs)} 篇文档")
         if docs:
             langchain_docs = split_documents(docs)
+            print(f"[知识库同步] 切分为 {len(langchain_docs)} 个片段")
             rebuild_index(langchain_docs)
-    except Exception:
-        pass  # 索引同步失败不阻塞 CRUD 操作
+            print(f"[知识库同步] 向量索引重建完成")
+    except Exception as e:
+        traceback.print_exc()
+        print(f"[知识库同步] 失败: {e}")
