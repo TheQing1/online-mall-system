@@ -70,6 +70,30 @@
             />
           </el-select>
         </el-form-item>
+        <el-form-item label="图片">
+          <div>
+            <div v-for="(img, i) in form.images" :key="i" style="display:inline-block;position:relative;margin:0 8px 8px 0">
+              <img :src="img" style="width:80px;height:80px;object-fit:cover;border-radius:4px" />
+              <el-button
+                type="danger" size="small" circle
+                style="position:absolute;top:-8px;right:-8px"
+                :icon="Close"
+                @click="form.images.splice(i, 1)"
+              />
+            </div>
+            <el-upload
+              :action="uploadUrl"
+              :headers="uploadHeaders"
+              :show-file-list="false"
+              :before-upload="beforeUpload"
+              :on-success="onUploadSuccess"
+              accept="image/*"
+              style="display:inline-block"
+            >
+              <el-button type="primary" plain :icon="Plus" :loading="uploading">上传图片</el-button>
+            </el-upload>
+          </div>
+        </el-form-item>
         <el-form-item label="状态">
           <el-switch
             v-model="form.statusOn"
@@ -89,6 +113,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Close, Plus } from '@element-plus/icons-vue'
 import client from '@/api/client'
 
 const products = ref([])
@@ -99,18 +124,45 @@ const total = ref(0)
 
 const dialogVisible = ref(false)
 const saving = ref(false)
+const uploading = ref(false)
 const editingId = ref(null)
 const categories = ref([])
 const formRef = ref(null)
+
+const uploadUrl = '/api/v1/admin/upload'
+const uploadHeaders = computed(() => ({
+  Authorization: `Bearer ${localStorage.getItem('admin_token')}`
+}))
 
 const form = reactive({
   name: '',
   description: '',
   price: 0,
   stock: 0,
+  images: [],
   category_id: null,
   statusOn: true,
 })
+
+function beforeUpload(file) {
+  const valid = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+  if (!valid.includes(file.type)) {
+    ElMessage.error('仅支持 JPG/PNG/GIF/WebP 格式')
+    return false
+  }
+  if (file.size > 2 * 1024 * 1024) {
+    ElMessage.error('图片不能超过 2MB')
+    return false
+  }
+  uploading.value = true
+  return true
+}
+
+function onUploadSuccess(res) {
+  form.images.push(res.url)
+  uploading.value = false
+  ElMessage.success('上传成功')
+}
 
 const isEdit = computed(() => editingId.value !== null)
 
@@ -156,6 +208,7 @@ function openDialog(row) {
     form.description = row.description || ''
     form.price = parseFloat(row.price)
     form.stock = row.stock
+    form.images = row.images || []
     form.category_id = row.category_id
     form.statusOn = row.status === 'on'
   } else {
@@ -170,6 +223,7 @@ function resetForm() {
   form.description = ''
   form.price = 0
   form.stock = 0
+  form.images = []
   form.category_id = null
   form.statusOn = true
 }
@@ -186,6 +240,7 @@ async function handleSave() {
       description: form.description || null,
       price: form.price,
       stock: form.stock,
+      images: form.images,
       category_id: form.category_id,
       status: form.statusOn ? 'on' : 'off',
     }
