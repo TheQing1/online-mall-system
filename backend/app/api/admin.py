@@ -10,6 +10,9 @@ from app.schemas.order import OrderOut
 from app.schemas.user import UserOut
 from app.services import product_service, order_service, user_service, knowledge_service
 from app.schemas.knowledge import KnowledgeDocCreate, KnowledgeDocUpdate, KnowledgeDocOut
+from app.ai.loader import split_documents
+from app.ai.vectorstore import rebuild_index
+from app.models.knowledge import KnowledgeDoc
 
 router = APIRouter()
 
@@ -124,13 +127,16 @@ def list_knowledge(db: Session = Depends(get_db), admin = Depends(get_current_ad
 
 @router.post("/knowledge", response_model=KnowledgeDocOut)
 def create_knowledge(data: KnowledgeDocCreate, db: Session = Depends(get_db), admin = Depends(get_current_admin)):
-    return knowledge_service.create_doc(db, data.model_dump())
+    doc = knowledge_service.create_doc(db, data.model_dump())
+    _sync_knowledge_index(db)
+    return doc
 
 @router.put("/knowledge/{doc_id}", response_model=KnowledgeDocOut)
 def update_knowledge(doc_id: int, data: KnowledgeDocUpdate, db: Session = Depends(get_db), admin = Depends(get_current_admin)):
     doc = knowledge_service.update_doc(db, doc_id, data.model_dump(exclude_none=True))
     if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
+    _sync_knowledge_index(db)
     return doc
 
 @router.delete("/knowledge/{doc_id}", response_model=MessageResponse)
@@ -138,4 +144,16 @@ def delete_knowledge(doc_id: int, db: Session = Depends(get_db), admin = Depends
     ok = knowledge_service.delete_doc(db, doc_id)
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
+    _sync_knowledge_index(db)
     return {"message": "删除成功"}
+
+
+def _sync_knowledge_index(db: Session):
+    """同步知识库到向量索引"""
+    try:
+        docs = db.query(KnowledgeDoc).all()
+        if docs:
+            langchain_docs = split_documents(docs)
+            rebuild_index(langchain_docs)
+    except Exception:
+        pass  # 索引同步失败不阻塞 CRUD 操作
