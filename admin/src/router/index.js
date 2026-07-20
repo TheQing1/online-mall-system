@@ -20,7 +20,11 @@ const routes = [
     name: 'AdminLogin',
     component: () => import('@/views/AdminLogin.vue')
   },
-  { path: '/:pathMatch(.*)*', redirect: '/admin' }
+  {
+    path: '/:pathMatch(.*)*',
+    name: 'NotFound',
+    component: () => import('@/views/NotFound.vue')
+  }
 ]
 
 const router = createRouter({
