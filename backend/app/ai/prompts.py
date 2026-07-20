@@ -1,4 +1,4 @@
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 
 SYSTEM_TEMPLATE = """你是 Online Mall 商城的 AI 智能客服。你需要根据以下知识库内容回答用户问题。
 
