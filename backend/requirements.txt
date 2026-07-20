@@ -9,6 +9,7 @@ python-multipart==0.0.9
 pydantic==2.9.0
 pydantic-settings==2.5.0
 langchain==0.3.0
+langchain-chroma==0.2.4
 langchain-openai==0.2.0
 chromadb==1.5.9
 openai==1.50.0
