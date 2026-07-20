@@ -4,14 +4,18 @@ from jose import jwt, JWTError
 from passlib.context import CryptContext
 from app.core.config import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__truncate_error=True)
 
 
 def hash_password(password: str) -> str:
+    # bcrypt 限制密码最大 72 字节
+    password = password[:72]
     return pwd_context.hash(password)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
+    # bcrypt 限制密码最大 72 字节
+    plain_password = plain_password[:72]
     return pwd_context.verify(plain_password, hashed_password)
 
 
