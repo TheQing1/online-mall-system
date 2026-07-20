@@ -4,15 +4,23 @@ import { ElMessage } from 'element-plus'
 const routes = [
   {
     path: '/admin',
-    name: 'Dashboard',
-    component: () => import('@/views/Dashboard.vue'),
-    meta: { requiresAdmin: true }
+    component: () => import('@/components/AdminLayout.vue'),
+    meta: { requiresAdmin: true },
+    children: [
+      { path: '', name: 'Dashboard', component: () => import('@/views/Dashboard.vue') },
+      { path: 'products', name: 'AdminProducts', component: () => import('@/views/Products.vue') },
+      { path: 'categories', name: 'AdminCategories', component: () => import('@/views/Categories.vue') },
+      { path: 'orders', name: 'AdminOrders', component: () => import('@/views/Orders.vue') },
+      { path: 'users', name: 'AdminUsers', component: () => import('@/views/Users.vue') },
+      { path: 'knowledge', name: 'AdminKnowledge', component: () => import('@/views/Knowledge.vue') },
+    ]
   },
   {
     path: '/admin/login',
     name: 'AdminLogin',
     component: () => import('@/views/AdminLogin.vue')
-  }
+  },
+  { path: '/:pathMatch(.*)*', redirect: '/admin' }
 ]
 
 const router = createRouter({
