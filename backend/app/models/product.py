@@ -18,7 +18,6 @@ class Category(Base, TimestampMixin):
     parent_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
     sort = Column(Integer, default=0, nullable=False)
 
-    children = relationship("Category", backref="parent", remote_side=[id])
     products = relationship("Product", back_populates="category")
 
 

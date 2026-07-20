@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Optional, List
 from datetime import datetime
-from pydantic import BaseModel, field_serializer
+from pydantic import BaseModel, field_validator
 from decimal import Decimal
 
 class OrderItemOut(BaseModel):
@@ -28,12 +28,12 @@ class OrderOut(BaseModel):
     class Config:
         from_attributes = True
 
-    @field_serializer("created_at")
+    @field_validator("created_at", mode="before")
     @classmethod
-    def serialize_created_at(cls, v):
+    def coerce_created_at(cls, v):
         if isinstance(v, datetime):
             return v.isoformat()
-        return str(v)
+        return str(v) if v else ""
 
 class OrderCreate(BaseModel):
     address_id: int
