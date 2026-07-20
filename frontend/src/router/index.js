@@ -46,6 +46,21 @@ const routes = [
     name: 'Addresses',
     component: () => import('@/views/Addresses.vue')
   },
+  {
+    path: '/checkout',
+    name: 'Checkout',
+    component: () => import('@/views/Checkout.vue')
+  },
+  {
+    path: '/orders',
+    name: 'Orders',
+    component: () => import('@/views/Orders.vue')
+  },
+  {
+    path: '/orders/:id',
+    name: 'OrderDetail',
+    component: () => import('@/views/OrderDetail.vue')
+  },
 ]
 
 const router = createRouter({
