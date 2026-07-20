@@ -1,7 +1,10 @@
+import os
+import uuid
 from typing import Optional
-from fastapi import APIRouter, Depends, Query, HTTPException, status
+from fastapi import APIRouter, Depends, Query, HTTPException, status, UploadFile, File
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_current_admin
 from app.schemas.common import PageResponse, MessageResponse
@@ -146,6 +149,31 @@ def delete_knowledge(doc_id: int, db: Session = Depends(get_db), admin = Depends
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
     _sync_knowledge_index(db)
     return {"message": "删除成功"}
+
+# --- File Upload ---
+
+@router.post("/upload")
+async def upload_image(file: UploadFile = File(...), admin = Depends(get_current_admin)):
+    """上传商品图片"""
+    # 校验文件类型
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in ("jpg", "jpeg", "png", "gif", "webp"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="仅支持 jpg/png/gif/webp 格式")
+
+    # 校验大小
+    contents = await file.read()
+    if len(contents) > settings.max_upload_size:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="图片大小不能超过 2MB")
+
+    # 保存文件
+    filename = f"{uuid.uuid4().hex}.{ext}"
+    upload_path = os.path.join(settings.upload_dir, filename)
+    os.makedirs(settings.upload_dir, exist_ok=True)
+    with open(upload_path, "wb") as f:
+        f.write(contents)
+
+    url = f"/static/products/{filename}"
+    return {"url": url}
 
 
 def _sync_knowledge_index(db: Session):
