@@ -14,12 +14,19 @@ _embeddings = None
 
 
 def get_embeddings():
-    """获取本地 Embedding 模型（免费、离线、中文优化）"""
+    """获取本地 Embedding 模型（通过 ModelScope 下载，国内可用）"""
     global _embeddings
     if _embeddings is None:
-        print(f"[Embedding] 加载本地模型: {EMBEDDING_MODEL} ...")
+        from modelscope import snapshot_download
+        print(f"[Embedding] 从 ModelScope 下载模型: {EMBEDDING_MODEL} ...")
+        model_dir = snapshot_download(
+            "BAAI/bge-small-zh-v1.5",
+            revision="master",
+            cache_dir=os.path.join(os.path.dirname(CHROMA_DIR), "models"),
+        )
+        print(f"[Embedding] 模型路径: {model_dir}")
         _embeddings = HuggingFaceEmbeddings(
-            model_name=EMBEDDING_MODEL,
+            model_name=model_dir,
             model_kwargs={"device": "cpu"},
             encode_kwargs={"normalize_embeddings": True},
         )
