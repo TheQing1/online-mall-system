@@ -3,6 +3,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from app.core.deps import get_optional_user
 from app.ai.rag import generate_stream
+import traceback
 
 router = APIRouter()
 
@@ -17,15 +18,15 @@ async def chat(request: ChatRequest, current_user=Depends(get_optional_user)):
     async def event_stream():
         try:
             async for text in generate_stream(request.message):
-                # SSE 格式：data: <content>\n\n
                 yield f"data: {text}\n\n"
             yield "data: [DONE]\n\n"
         except ValueError as e:
-            # API Key 未配置
             yield f"data: [ERROR] {str(e)}\n\n"
             yield "data: [DONE]\n\n"
-        except Exception:
-            yield "data: [ERROR] AI 服务暂时不可用，请稍后重试\n\n"
+        except Exception as e:
+            msg = str(e) or type(e).__name__
+            traceback.print_exc()
+            yield f"data: [ERROR] {msg}\n\n"
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(
