@@ -1,26 +1,30 @@
 import os
+import traceback
 from chromadb.config import Settings as ChromaSettings
 from langchain_chroma import Chroma
-from langchain_openai import OpenAIEmbeddings
-from app.core.config import settings
+from langchain_huggingface import HuggingFaceEmbeddings
 
 # ChromaDB 持久化目录（放在 backend 下）
 CHROMA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "chroma_db")
 
+# 本地中文 Embedding 模型（首次运行自动下载，约 100MB）
+EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"
+
+_embeddings = None
+
 
 def get_embeddings():
-    """获取 Embedding 模型"""
-    if settings.deepseek_api_key and settings.deepseek_api_key != "your-deepseek-api-key":
-        return OpenAIEmbeddings(
-            model="text-embedding-3-small",
-            api_key=settings.deepseek_api_key,
-            base_url=settings.deepseek_base_url,
+    """获取本地 Embedding 模型（免费、离线、中文优化）"""
+    global _embeddings
+    if _embeddings is None:
+        print(f"[Embedding] 加载本地模型: {EMBEDDING_MODEL} ...")
+        _embeddings = HuggingFaceEmbeddings(
+            model_name=EMBEDDING_MODEL,
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={"normalize_embeddings": True},
         )
-    # Fallback: use a local/smaller embedding approach
-    raise ValueError(
-        "请在 .env 中配置 DEEPSEEK_API_KEY。"
-        "获取 Key: https://platform.deepseek.com/api_keys"
-    )
+        print("[Embedding] 模型加载完成")
+    return _embeddings
 
 
 def get_vectorstore():
@@ -47,7 +51,6 @@ def rebuild_index(documents):
         client_settings=ChromaSettings(anonymized_telemetry=False),
     )
     if documents:
-        # 批量添加，每批最多 100 个
         for i in range(0, len(documents), 100):
             batch = documents[i:i+100]
             vectorstore.add_documents(batch)
@@ -56,7 +59,6 @@ def rebuild_index(documents):
 
 def search_similar(query: str, k: int = 3):
     """相似度检索，返回 (Document, score) 列表"""
-    import traceback
     vectorstore = get_vectorstore()
     try:
         count = vectorstore._collection.count()
