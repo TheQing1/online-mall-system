@@ -13,13 +13,17 @@ router = APIRouter()
 def get_cart(db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     return cart_service.get_cart(db, current_user)
 
-@router.post("/items", response_model=CartItemOut)
+@router.post("/items", response_model=CartOut)
 def add_item(data: CartItemCreate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
-    return cart_service.add_cart_item(db, current_user, data.product_id, data.quantity)
+    cart_service.add_cart_item(
+        db, current_user, data.product_id, data.quantity, data.sku_id
+    )
+    return cart_service.get_cart(db, current_user)
 
-@router.put("/items/{item_id}", response_model=CartItemOut)
+@router.put("/items/{item_id}", response_model=CartOut)
 def update_item(item_id: int, data: CartItemUpdate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
-    return cart_service.update_cart_item(db, item_id, current_user, data.quantity)
+    cart_service.update_cart_item(db, item_id, current_user, data.quantity)
+    return cart_service.get_cart(db, current_user)
 
 @router.delete("/items/{item_id}", response_model=MessageResponse)
 def delete_item(item_id: int, db: Session = Depends(get_db), current_user = Depends(get_current_user)):

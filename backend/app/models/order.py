@@ -1,4 +1,14 @@
-from sqlalchemy import Column, Integer, String, Text, DECIMAL, JSON, Enum, ForeignKey
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Text,
+    DECIMAL,
+    JSON,
+    Enum,
+    ForeignKey,
+    DateTime,
+)
 from sqlalchemy.orm import relationship
 import enum
 
@@ -25,6 +35,11 @@ class Order(Base, TimestampMixin):
     status = Column(Enum(OrderStatus), default=OrderStatus.PENDING_PAY, nullable=False)
     address_snapshot = Column(JSON, nullable=False)
     remark = Column(Text, nullable=True)
+    paid_at = Column(DateTime, nullable=True)
+    refund_from_status = Column(String(20), nullable=True)
+    refund_reason = Column(Text, nullable=True)
+    refund_note = Column(Text, nullable=True)
+    refunded_at = Column(DateTime, nullable=True)
 
     user = relationship("User", back_populates="orders")
     items = relationship(
@@ -38,6 +53,9 @@ class OrderItem(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     order_id = Column(Integer, ForeignKey("orders.id"), nullable=False)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    sku_id = Column(Integer, ForeignKey("product_skus.id"), nullable=False)
+    sku_name = Column(String(150), nullable=False)
+    sku_spec = Column(JSON, nullable=False, default=dict)
     product_name = Column(String(200), nullable=False)
     product_image = Column(String(255), nullable=True)
     price = Column(DECIMAL(10, 2), nullable=False)
@@ -45,3 +63,4 @@ class OrderItem(Base):
 
     order = relationship("Order", back_populates="items")
     product = relationship("Product")
+    sku = relationship("ProductSku")
