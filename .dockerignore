@@ -1,0 +1,33 @@
+# 构建上下文根目录是仓库根，这里排除与镜像无关的内容。
+
+# 版本控制与 CI
+.git
+.gitignore
+.github
+
+# 依赖与虚拟环境
+.venv
+venv
+node_modules
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.ruff_cache
+
+# 大文件 / 自动生成
+# backend/Dockerfile 会 COPY backend/app，必须排除模型缓存与向量库，
+# 否则镜像会白白增大 180MB+。两者都在 app/ 包内部。
+backend/app/models/models
+backend/app/chroma_db
+# 兼容旧路径
+backend/models
+backend/chroma_db
+
+# 商品图片由 docker-compose 以 volume 挂载，不打进镜像
+backend/static/products
+
+# 文档与内部草稿
+docs
+.superpowers
+
+*.log
