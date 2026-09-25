@@ -7,7 +7,7 @@
 
 import os
 import traceback
-from typing import List, Optional
+from typing import List
 
 import chromadb
 from chromadb.config import Settings as ChromaSettings

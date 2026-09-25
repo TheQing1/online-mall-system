@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
-from app.schemas.cart import CartItemCreate, CartItemUpdate, CartOut, CartItemOut
+from app.schemas.cart import CartItemCreate, CartItemUpdate, CartOut
 from app.schemas.common import MessageResponse
 from app.services import cart_service
 

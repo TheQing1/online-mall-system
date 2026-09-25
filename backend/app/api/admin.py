@@ -18,7 +18,7 @@ from app.ai.vectorstore import search_similar
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_current_admin
-from app.models.knowledge import KnowledgeDoc, KnowledgeCategory
+from app.models.knowledge import KnowledgeCategory
 from app.models.chat import EvalTestCase
 from app.schemas.common import PageResponse, MessageResponse
 from app.schemas.content import BannerCreate, BannerOut, BannerUpdate

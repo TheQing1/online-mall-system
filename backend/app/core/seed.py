@@ -9,7 +9,7 @@ from app.models.content import Banner
 from app.models.user import User, UserRole
 from app.models.product import Category, Product, ProductStatus
 from app.models.sku import ProductSku
-from app.models.knowledge import KnowledgeDoc, KnowledgeCategory
+from app.models.knowledge import KnowledgeDoc
 from app.models.chat import EvalTestCase
 from app.core.security import hash_password
 

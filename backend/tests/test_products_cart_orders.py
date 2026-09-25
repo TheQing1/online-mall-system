@@ -1,5 +1,3 @@
-import pytest
-
 from tests.conftest import auth_header, create_address, create_product
 
 
