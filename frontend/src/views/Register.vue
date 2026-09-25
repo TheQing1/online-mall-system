@@ -61,7 +61,8 @@ async function handleRegister() {
     ElMessage.success('注册成功')
     router.push('/')
   } catch (e) {
-    // Error handled by interceptor
+    const msg = e.response?.data?.detail || '注册失败，请稍后重试'
+    ElMessage.error(msg)
   } finally {
     loading.value = false
   }

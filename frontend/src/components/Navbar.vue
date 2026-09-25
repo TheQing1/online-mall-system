@@ -1,7 +1,7 @@
 <template>
   <el-header class="navbar">
     <div class="nav-left">
-      <router-link to="/" class="logo">🛒 Online Mall</router-link>
+      <router-link to="/" class="logo">🛍️ Online Mall</router-link>
     </div>
     <div class="nav-center">
       <el-input
@@ -28,6 +28,7 @@
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item @click="$router.push('/orders')">我的订单</el-dropdown-item>
+              <el-dropdown-item @click="$router.push('/user/favorites')">我的收藏</el-dropdown-item>
               <el-dropdown-item @click="$router.push('/user/profile')">个人中心</el-dropdown-item>
               <el-dropdown-item divided @click="logout">退出登录</el-dropdown-item>
             </el-dropdown-menu>

@@ -51,7 +51,8 @@ async function handleLogin() {
     ElMessage.success('登录成功')
     router.push('/')
   } catch (e) {
-    // Error already handled by axios interceptor
+    const msg = e.response?.data?.detail || '登录失败，请稍后重试'
+    ElMessage.error(msg)
   } finally {
     loading.value = false
   }

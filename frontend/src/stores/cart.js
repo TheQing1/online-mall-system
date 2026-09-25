@@ -19,13 +19,15 @@ export const useCartStore = defineStore('cart', () => {
     } catch {}
   }
 
-  async function addItem(productId, quantity) {
+  async function addItem(productId, quantity, skuId = null) {
     const token = localStorage.getItem('token')
     if (!token) return
     const axios = (await import('axios')).default
-    await axios.post('/api/v1/cart/items', { product_id: productId, quantity }, {
-      headers: { Authorization: `Bearer ${token}` }
-    })
+    await axios.post(
+      '/api/v1/cart/items',
+      { product_id: productId, sku_id: skuId, quantity },
+      { headers: { Authorization: `Bearer ${token}` } }
+    )
     await fetchCart()
   }
 
