@@ -93,6 +93,13 @@ def get_vectorstore():
 
 
 def _embed(texts: List[str]):
+    """query 与文档共用同一向量函数。
+
+    曾按 BGE v1 的用法给 query 加上「为这个句子生成表示以用于检索相关文章：」
+    指令前缀，并在自建评测集上做过 A/B：命中率不变，但平均余弦距离从 0.357
+    劣化到 0.401。bge-*-v1.5 不再需要该前缀（那是 v1 的要求），因此不加。
+    见 tests/test_rag_quality.py。
+    """
     return _ef(texts)
 
 
