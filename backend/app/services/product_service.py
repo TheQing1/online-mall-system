@@ -77,7 +77,7 @@ def get_products(
     """公开商品列表（仅上架），支持搜索、分类筛选、排序、分页。"""
     query = (
         db.query(Product)
-        .options(selectinload(Product.skus))
+        .options(selectinload(Product.skus), selectinload(Product.category))
         .filter(Product.status == ProductStatus.ON)
     )
 
@@ -146,7 +146,7 @@ def search_products(db: Session, keyword: str, limit: int = 5):
     """供 AI 客服使用的轻量商品检索（仅上架）。"""
     query = (
         db.query(Product)
-        .options(selectinload(Product.skus))
+        .options(selectinload(Product.skus), selectinload(Product.category))
         .filter(Product.status == ProductStatus.ON)
     )
     query = query.filter(
@@ -231,9 +231,33 @@ def admin_update_product(db: Session, product_id: int, data: dict) -> Optional[P
 
 
 def admin_delete_product(db: Session, product_id: int) -> bool:
+    """删除商品。
+
+    已有订单的商品不能物理删除：``order_items`` 还引用着 ``products.id`` 与
+    ``product_skus.id``，删除会破坏历史订单（MySQL 下直接外键报错 500，
+    测试用的 SQLite 又默认不校验外键，于是变成静默产生孤儿数据）。
+    这种情况应改为下架。
+    """
+    from app.models.cart import CartItem
+    from app.models.content import Favorite
+    from app.models.order import OrderItem
+
     product = db.query(Product).filter(Product.id == product_id).first()
     if not product:
         return False
+
+    ordered = (
+        db.query(OrderItem.id).filter(OrderItem.product_id == product_id).first()
+    )
+    if ordered:
+        raise HTTPException(
+            status_code=400,
+            detail="该商品已有订单记录，不能删除；如需停售请将其下架",
+        )
+
+    # 尚未成交的引用可以直接清理，否则同样会触发外键约束
+    db.query(CartItem).filter(CartItem.product_id == product_id).delete()
+    db.query(Favorite).filter(Favorite.product_id == product_id).delete()
     db.delete(product)
     db.commit()
     return True
