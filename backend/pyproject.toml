@@ -1,0 +1,35 @@
+# ruff 与覆盖率配置。pytest 的配置在 pytest.ini。
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+# 刻意只启用「一定是 bug、不是风格偏好」的规则，让 CI 从第一次提交起就是绿的。
+#
+# 其中 F821 undefined-name 对本项目有实际意义：api/users.py 曾经用了
+# status.HTTP_404_NOT_FOUND 却没有 import status，导致「修改/删除不存在的地址」
+# 直接 500，而当时没有任何测试覆盖到。F401/F841 也一次性清掉了一批死导入。
+#
+# 想收紧风格（import 排序、pyupgrade、bugbear）时再扩到：
+#   select = ["E4", "E7", "E9", "F", "I", "UP", "B", "C4"]
+# 然后 ruff check --fix 跑一遍。
+select = ["F", "E9"]
+
+[tool.coverage.run]
+source = ["app"]
+omit = [
+    "app/core/seed.py",
+    "app/ai/vectorstore.py",
+    "alembic/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]

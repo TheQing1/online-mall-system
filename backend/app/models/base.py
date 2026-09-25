@@ -1,5 +1,4 @@
-from datetime import datetime
-from sqlalchemy import Column, Integer, DateTime, func
+from sqlalchemy import Column, DateTime, func
 from sqlalchemy.orm import DeclarativeBase
 
 

@@ -6,8 +6,6 @@
 
 from datetime import datetime, timedelta
 
-import pytest
-
 from app.models.order import Order, OrderStatus
 from app.models.product import Product, ProductStatus
 from app.models.sku import ProductSku
