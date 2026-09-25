@@ -1,7 +1,7 @@
 <template>
   <el-container style="min-height:100vh">
     <el-aside width="220px" style="background:#304156">
-      <div class="logo">🛒 商城管理</div>
+      <div class="logo">🛍️ 商城管理</div>
       <el-menu
         :default-active="route.path"
         background-color="#304156"
@@ -29,14 +29,24 @@
           <el-icon><User /></el-icon>
           <span>用户管理</span>
         </el-menu-item>
+        <el-menu-item index="/admin/banners">
+          <el-icon><Picture /></el-icon>
+          <span>Banner 管理</span>
+        </el-menu-item>
         <el-menu-item index="/admin/knowledge">
           <el-icon><Reading /></el-icon>
-          <span>知识库</span>
+          <span>知识库管理</span>
+        </el-menu-item>
+        <el-menu-item index="/admin/ai-eval">
+          <el-icon><Aim /></el-icon>
+          <span>RAG 评测</span>
         </el-menu-item>
       </el-menu>
     </el-aside>
     <el-container>
-      <el-header style="display:flex;justify-content:flex-end;align-items:center;border-bottom:1px solid #eee;background:#fff">
+      <el-header
+        style="display:flex;justify-content:flex-end;align-items:center;border-bottom:1px solid #eee;background:#fff"
+      >
         <span style="margin-right:16px">管理员</span>
         <el-button @click="logout">退出</el-button>
       </el-header>
@@ -49,7 +59,16 @@
 
 <script setup>
 import { useRoute, useRouter } from 'vue-router'
-import { DataAnalysis, Goods, Menu, Document, User, Reading } from '@element-plus/icons-vue'
+import {
+  DataAnalysis,
+  Goods,
+  Menu,
+  Document,
+  User,
+  Picture,
+  Reading,
+  Aim,
+} from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
