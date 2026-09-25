@@ -83,5 +83,16 @@ def test_rag_eval_endpoint(client, db, tmp_path, monkeypatch, admin):
     res = client.post("/api/v1/admin/ai/eval/run", headers=headers)
     assert res.status_code == 200
     payload = res.json()
+
+    # 这里用假向量，命中率本身没有意义（真实模型的召回率见 test_rag_quality.py）。
+    # 但「接口是否按用例数正确统计」必须被断言 —— 之前只写了 hit_rate >= 0，
+    # 而命中率天然非负，等于什么都没验证。
     assert payload["total"] == 1
-    assert payload["hit_rate"] >= 0
+    assert payload["hit_rate"] in (0.0, 1.0)
+    result = payload["results"][0]
+    assert result["question"] == "省会城市几天能送到？"
+    assert result["expected_title"] == "配送说明"
+    assert isinstance(result["hit"], bool)
+    assert isinstance(result["retrieved_titles"], list)
+    # 该文档确实被索引了，至少要能召回一条
+    assert result["retrieved_titles"], payload
