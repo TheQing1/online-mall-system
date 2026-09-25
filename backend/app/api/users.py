@@ -1,11 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.schemas.user import UserUpdate, AddressCreate, AddressOut
-from app.schemas.common import MessageResponse
-from app.services import user_service
+from app.schemas.product import ProductOut
+from app.schemas.common import PageResponse, MessageResponse
+from app.services import user_service, favorite_service
 
 router = APIRouter()
 
@@ -37,3 +38,38 @@ def delete_address(address_id: int, db: Session = Depends(get_db), current_user 
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="地址不存在")
     return {"message": "删除成功"}
+
+
+# --- Favorites ---
+
+
+@router.get("/favorites", response_model=PageResponse[ProductOut])
+def list_favorites(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    return favorite_service.get_favorite_products(db, current_user, page, page_size)
+
+
+@router.post("/favorites/{product_id}", response_model=MessageResponse)
+def add_favorite(
+    product_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    favorite_service.add_favorite(db, current_user, product_id)
+    return {"message": "收藏成功"}
+
+
+@router.delete("/favorites/{product_id}", response_model=MessageResponse)
+def remove_favorite(
+    product_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    ok = favorite_service.remove_favorite(db, current_user, product_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="收藏不存在")
+    return {"message": "已取消收藏"}

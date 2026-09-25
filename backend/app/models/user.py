@@ -29,6 +29,9 @@ class User(Base, TimestampMixin):
     cart_items = relationship(
         "CartItem", back_populates="user", cascade="all, delete-orphan"
     )
+    favorites = relationship(
+        "Favorite", back_populates="user", cascade="all, delete-orphan"
+    )
     orders = relationship(
         "Order", back_populates="user", cascade="all, delete-orphan"
     )

@@ -1,16 +1,18 @@
-from pydantic import BaseModel
+from decimal import Decimal
+from typing import Optional
+from pydantic import BaseModel, Field
 
 class CartItemCreate(BaseModel):
     product_id: int
-    quantity: int = 1
+    sku_id: Optional[int] = None
+    quantity: int = Field(1, ge=1)
 
 class CartItemUpdate(BaseModel):
-    quantity: int
+    quantity: int = Field(..., ge=1)
 
 class CartProductOut(BaseModel):
     id: int
     name: str
-    price: float
     image: str = ""
 
     class Config:
@@ -19,7 +21,11 @@ class CartProductOut(BaseModel):
 class CartItemOut(BaseModel):
     id: int
     product_id: int
+    sku_id: int
     quantity: int
+    sku_name: str
+    sku_spec: dict = {}
+    unit_price: Decimal
     product: CartProductOut
 
     class Config:
@@ -28,4 +34,4 @@ class CartItemOut(BaseModel):
 class CartOut(BaseModel):
     items: list[CartItemOut]
     total_count: int
-    total_amount: float
+    total_amount: Decimal

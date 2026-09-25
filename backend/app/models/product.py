@@ -35,3 +35,9 @@ class Product(Base, TimestampMixin):
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
 
     category = relationship("Category", back_populates="products")
+    skus = relationship(
+        "ProductSku",
+        back_populates="product",
+        cascade="all, delete-orphan",
+        order_by="ProductSku.id",
+    )

@@ -20,10 +20,13 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "change-me"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 1440
+    order_expire_minutes: int = 30
 
     # DeepSeek
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-v4-flash"
+    rag_score_threshold: float = 0.7
 
     # File Upload
     upload_dir: str = "static/products"
