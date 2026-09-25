@@ -1,0 +1,19 @@
+# 统一换行符：仓库内存 LF，避免 Windows 开发与 Linux 容器之间来回抖动。
+# docker-entrypoint.sh 依赖 LF，缺了这行在 Windows 上检出会变成 CRLF 导致容器启动失败。
+* text=auto eol=lf
+
+# 明确按二进制处理，不做换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
+*.db binary
+
+# 这些必须保持 LF
+*.sh text eol=lf
+Dockerfile text eol=lf
