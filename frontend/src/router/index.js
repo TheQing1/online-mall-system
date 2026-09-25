@@ -4,73 +4,83 @@ const routes = [
   {
     path: '/',
     name: 'Home',
-    component: () => import('@/views/Home.vue')
+    component: () => import('@/views/Home.vue'),
   },
   {
     path: '/login',
     name: 'Login',
-    component: () => import('@/views/Login.vue')
+    component: () => import('@/views/Login.vue'),
   },
   {
     path: '/register',
     name: 'Register',
-    component: () => import('@/views/Register.vue')
+    component: () => import('@/views/Register.vue'),
   },
   {
     path: '/search',
     name: 'Search',
-    component: () => import('@/views/ProductList.vue')
+    component: () => import('@/views/ProductList.vue'),
   },
   {
     path: '/category/:id',
     name: 'Category',
-    component: () => import('@/views/ProductList.vue')
+    component: () => import('@/views/ProductList.vue'),
   },
   {
     path: '/product/:id',
     name: 'ProductDetail',
-    component: () => import('@/views/ProductDetail.vue')
+    component: () => import('@/views/ProductDetail.vue'),
   },
   {
     path: '/cart',
     name: 'Cart',
-    component: () => import('@/views/Cart.vue')
+    component: () => import('@/views/Cart.vue'),
   },
   {
     path: '/user/profile',
     name: 'UserProfile',
-    component: () => import('@/views/UserProfile.vue')
+    component: () => import('@/views/UserProfile.vue'),
   },
   {
     path: '/user/addresses',
     name: 'Addresses',
-    component: () => import('@/views/Addresses.vue')
+    component: () => import('@/views/Addresses.vue'),
+  },
+  {
+    path: '/user/favorites',
+    name: 'Favorites',
+    component: () => import('@/views/Favorites.vue'),
   },
   {
     path: '/checkout',
     name: 'Checkout',
-    component: () => import('@/views/Checkout.vue')
+    component: () => import('@/views/Checkout.vue'),
+  },
+  {
+    path: '/payment/:id',
+    name: 'Payment',
+    component: () => import('@/views/Payment.vue'),
   },
   {
     path: '/orders',
     name: 'Orders',
-    component: () => import('@/views/Orders.vue')
+    component: () => import('@/views/Orders.vue'),
   },
   {
     path: '/orders/:id',
     name: 'OrderDetail',
-    component: () => import('@/views/OrderDetail.vue')
+    component: () => import('@/views/OrderDetail.vue'),
   },
   {
     path: '/:pathMatch(.*)*',
     name: 'NotFound',
-    component: () => import('@/views/NotFound.vue')
+    component: () => import('@/views/NotFound.vue'),
   },
 ]
 
 const router = createRouter({
   history: createWebHistory(),
-  routes
+  routes,
 })
 
 export default router
