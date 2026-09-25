@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import models  # noqa: E402,F401
-from app.core.database import get_db  # noqa: E402
+from app.core.database import get_db, get_session_factory  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models.base import Base  # noqa: E402
@@ -19,16 +19,25 @@ from app.models.user import Address, User, UserRole  # noqa: E402
 
 
 @pytest.fixture()
-def db(tmp_path):
-    engine = create_engine(
+def engine(tmp_path):
+    """每个用例一个独立的 SQLite 文件，用例之间互不干扰。"""
+    eng = create_engine(
         f"sqlite:///{tmp_path / 'test.db'}",
         connect_args={"check_same_thread": False, "timeout": 30},
     )
-    Base.metadata.create_all(engine)
-    TestingSessionLocal = sessionmaker(
-        bind=engine, autocommit=False, autoflush=False
-    )
-    session = TestingSessionLocal()
+    Base.metadata.create_all(eng)
+    yield eng
+    eng.dispose()
+
+
+@pytest.fixture()
+def session_factory(engine):
+    return sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+
+@pytest.fixture()
+def db(session_factory):
+    session = session_factory()
     try:
         yield session
     finally:
@@ -36,11 +45,13 @@ def db(tmp_path):
 
 
 @pytest.fixture()
-def client(db):
+def client(db, session_factory):
     def override_get_db():
         yield db
 
     app.dependency_overrides[get_db] = override_get_db
+    # SSE 端点在生成器内部自建会话，所以还要覆盖 Session 工厂
+    app.dependency_overrides[get_session_factory] = lambda: session_factory
     yield TestClient(app)
     app.dependency_overrides.clear()
 
