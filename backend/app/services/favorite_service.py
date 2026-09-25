@@ -63,7 +63,7 @@ def get_favorite_products(db: Session, user, page: int = 1, page_size: int = 20)
     query = (
         db.query(Product)
         .join(Favorite, Favorite.product_id == Product.id)
-        .options(selectinload(Product.skus))
+        .options(selectinload(Product.skus), selectinload(Product.category))
         .filter(
             Favorite.user_id == user.id,
             Product.status == ProductStatus.ON,

@@ -92,7 +92,8 @@ def get_cart(db: Session, user) -> dict:
         )
     return {
         "items": payload_items,
-        "total_count": sum(i.quantity for i in items),
+        # 角标数量必须和上面实际返回的条目一致（下架商品已过滤掉）
+        "total_count": sum(i["quantity"] for i in payload_items),
         "total_amount": total_amount,
     }
 
@@ -110,7 +111,14 @@ def add_cart_item(
         .first()
     )
     if item:
-        item.quantity += quantity
+        # 必须校验「累加之后」的总量，否则重复加购可以突破库存上限
+        new_quantity = item.quantity + quantity
+        if sku.stock < new_quantity:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"库存不足，购物车已有 {item.quantity} 件，最多还能加 {sku.stock - item.quantity} 件",
+            )
+        item.quantity = new_quantity
     else:
         item = CartItem(
             user_id=user.id, product_id=product_id, sku_id=sku.id, quantity=quantity
@@ -152,6 +160,13 @@ def delete_cart_item(db: Session, item_id: int, user) -> bool:
     return True
 
 
-def clear_cart(db: Session, user):
+def clear_cart(db: Session, user, *, commit: bool = True):
+    """清空购物车。
+
+    ``commit=False`` 用于已经被外层事务包裹的场景：``create_order`` 里
+    「扣库存 + 建订单 + 清空购物车」必须在同一个事务内提交，否则中途
+    commit 会让后面的失败无法回滚。
+    """
     db.query(CartItem).filter(CartItem.user_id == user.id).delete()
-    db.commit()
+    if commit:
+        db.commit()

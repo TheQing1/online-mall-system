@@ -142,7 +142,7 @@ def create_order(
                 )
             )
 
-        cart_service.clear_cart(db, user)
+        cart_service.clear_cart(db, user, commit=False)
         db.commit()
         db.refresh(order)
         return order
@@ -151,17 +151,36 @@ def create_order(
         raise
 
 
+def _transition(
+    db: Session, order_id: int, from_status: OrderStatus, to_status: OrderStatus, **values
+) -> bool:
+    """原子状态流转：只有当前仍处于 ``from_status`` 时才更新。
+
+    先读状态再写（check-then-act）在并发下会出问题：两次支付请求可能都读到
+    ``pending_pay``，于是销量被累加两次；自动关单任务也可能把刚刚支付成功的
+    订单改成 ``cancelled``。这里用条件 UPDATE 的 rowcount 做乐观并发控制。
+    """
+    updated = db.execute(
+        update(Order)
+        .where(Order.id == order_id, Order.status == from_status)
+        .values(status=to_status, **values)
+        .execution_options(synchronize_session=False)
+    ).rowcount
+    return bool(updated)
+
+
 def pay_order(db: Session, order_id: int, user) -> Order:
     """页面化模拟支付：由收银台页面发起，将待支付订单置为已支付。"""
     order = _get_user_order(db, order_id, user)
     if not order:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="订单不存在")
-    if order.status != OrderStatus.PENDING_PAY:
+    if not _transition(
+        db, order.id, OrderStatus.PENDING_PAY, OrderStatus.PAID, paid_at=datetime.now()
+    ):
+        db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="仅待支付订单可支付"
         )
-    order.status = OrderStatus.PAID
-    order.paid_at = datetime.now()
     _increase_sales(db, order)
     db.commit()
     db.refresh(order)
@@ -173,11 +192,11 @@ def complete_order(db: Session, order_id: int, user) -> Order:
     order = _get_user_order(db, order_id, user)
     if not order:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="订单不存在")
-    if order.status != OrderStatus.SHIPPED:
+    if not _transition(db, order.id, OrderStatus.SHIPPED, OrderStatus.COMPLETED):
+        db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="仅已发货订单可确认收货"
         )
-    order.status = OrderStatus.COMPLETED
     db.commit()
     db.refresh(order)
     return order
@@ -187,11 +206,11 @@ def cancel_order(db: Session, order_id: int, user) -> Optional[Order]:
     order = _get_user_order(db, order_id, user)
     if not order:
         return None
-    if order.status != OrderStatus.PENDING_PAY:
+    if not _transition(db, order.id, OrderStatus.PENDING_PAY, OrderStatus.CANCELLED):
+        db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="仅待支付订单可取消"
         )
-    order.status = OrderStatus.CANCELLED
     _restore_stock(db, order)
     db.commit()
     db.refresh(order)
@@ -210,9 +229,19 @@ def apply_refund(db: Session, order_id: int, user, reason: str) -> Order:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="当前状态不可申请退款"
         )
-    order.refund_from_status = order.status.value
-    order.refund_reason = reason
-    order.status = OrderStatus.REFUNDING
+    if not _transition(
+        db,
+        order.id,
+        order.status,
+        OrderStatus.REFUNDING,
+        refund_from_status=order.status.value,
+        refund_reason=reason,
+    ):
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="订单状态已变更，请刷新后重试",
+        )
     db.commit()
     db.refresh(order)
     return order
@@ -306,9 +335,18 @@ def admin_update_order_status(
             detail=f"不允许从 {order.status.value} 流转到 {target.value}",
         )
 
-    order.status = target
+    values = {}
     if target == OrderStatus.PAID:
-        order.paid_at = datetime.now()
+        values["paid_at"] = datetime.now()
+
+    if not _transition(db, order.id, order.status, target, **values):
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="订单状态已被其他操作修改，请刷新后重试",
+        )
+
+    if target == OrderStatus.PAID:
         _increase_sales(db, order)
     elif target == OrderStatus.CANCELLED:
         _restore_stock(db, order)
@@ -339,40 +377,64 @@ def admin_review_refund(
             status_code=status.HTTP_400_BAD_REQUEST, detail="订单不在退款中"
         )
 
-    order.refund_note = note
+    try:
+        target = (
+            OrderStatus.REFUNDED
+            if approve
+            else OrderStatus(order.refund_from_status or "paid")
+        )
+    except ValueError:
+        target = OrderStatus.PAID
+
+    values = {"refund_note": note, "refund_from_status": None}
     if approve:
-        order.status = OrderStatus.REFUNDED
-        order.refunded_at = datetime.now()
+        values["refunded_at"] = datetime.now()
+
+    if not _transition(db, order.id, OrderStatus.REFUNDING, target, **values):
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="订单状态已变更，请刷新后重试",
+        )
+
+    if approve:
         _restore_stock(db, order)
         _decrease_sales(db, order)
-    else:
-        try:
-            order.status = OrderStatus(order.refund_from_status or "paid")
-        except ValueError:
-            order.status = OrderStatus.PAID
-    order.refund_from_status = None
     db.commit()
     db.refresh(order)
     return order
 
 
 def auto_cancel_expired_orders(db: Session, expire_minutes: Optional[int] = None):
-    """待支付超过时限自动关单并回补库存。返回取消数量。"""
+    """待支付超过时限自动关单并回补库存。返回取消数量。
+
+    逐单做条件 UPDATE，避免和用户支付并发时把已支付订单改成 cancelled。
+    """
     minutes = expire_minutes or settings.order_expire_minutes
-    expired = (
-        db.query(Order)
+    deadline = datetime.now() - timedelta(minutes=minutes)
+    expired_ids = [
+        row[0]
+        for row in db.query(Order.id)
         .filter(
             Order.status == OrderStatus.PENDING_PAY,
-            Order.created_at < datetime.now() - timedelta(minutes=minutes),
+            Order.created_at < deadline,
         )
         .all()
-    )
-    for order in expired:
-        order.status = OrderStatus.CANCELLED
+    ]
+
+    cancelled = 0
+    for order_id in expired_ids:
+        if not _transition(
+            db, order_id, OrderStatus.PENDING_PAY, OrderStatus.CANCELLED
+        ):
+            # 期间被支付或取消，跳过
+            continue
+        order = db.query(Order).filter(Order.id == order_id).first()
         _restore_stock(db, order)
-    if expired:
+        cancelled += 1
+    if cancelled:
         db.commit()
-    return len(expired)
+    return cancelled
 
 
 def admin_get_dashboard_stats(db: Session) -> dict:
