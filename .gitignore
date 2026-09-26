@@ -24,11 +24,13 @@ frontend/dist/
 admin/dist/
 
 # ---- 大文件 / 自动生成 ----
-# 注意：模型缓存与向量库都在 app/ 包内部（app/models/models、app/chroma_db），
-# 早期这里误写成 backend/models、backend/chroma_db，导致 183MB 模型权重没被忽略。
+# 向量库与 Embedding 模型缓存（约 183MB）都在 backend/data 下。
+# 注意：早期这里误写成 backend/models、backend/chroma_db，而当时实际路径是
+# backend/app/models/models 与 backend/app/chroma_db，导致模型权重没被忽略。
+backend/data/
+# 兼容历史路径
 backend/app/models/models/
 backend/app/chroma_db/
-# 兼容旧路径
 backend/models/
 backend/chroma_db/
 

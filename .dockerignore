@@ -15,11 +15,12 @@ node_modules
 **/.ruff_cache
 
 # 大文件 / 自动生成
-# backend/Dockerfile 会 COPY backend/app，必须排除模型缓存与向量库，
-# 否则镜像会白白增大 180MB+。两者都在 app/ 包内部。
+# 向量库与 Embedding 模型缓存（约 183MB）在 backend/data 下，由 compose 用
+# volume 挂载，不打进镜像——否则镜像白白增大 180MB+。
+backend/data
+# 兼容历史路径
 backend/app/models/models
 backend/app/chroma_db
-# 兼容旧路径
 backend/models
 backend/chroma_db
 

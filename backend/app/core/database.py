@@ -6,6 +6,10 @@ from app.core.config import settings
 engine = create_engine(
     settings.database_url,
     pool_size=10,
+    max_overflow=20,
+    # MySQL 默认 wait_timeout 为 8 小时，连接被服务端悄悄断开后，
+    # 从池里取出的死连接会让下一个请求报 "server has gone away"。
+    pool_pre_ping=True,
     pool_recycle=3600,
     echo=False,
 )

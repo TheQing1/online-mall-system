@@ -3,6 +3,9 @@
 项目早期使用 langchain-chroma 0.2.2，但它要求 chromadb<0.7，
 与 1.x 预编译 wheel 冲突；这里改为直接调用 Chroma 原生 API，
 既能使用新版本，也不影响上层 RAG 代码。
+
+向量库与模型缓存都放在 ``settings.data_dir``（默认 ``backend/data``）下，
+而不是 Python 包内部——见 config.data_dir 的说明。
 """
 
 import os
@@ -14,29 +17,31 @@ from chromadb.config import Settings as ChromaSettings
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 
-CHROMA_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "chroma_db"
-)
+from app.core.config import settings
+
+# 测试会 monkeypatch 这个模块级变量，因此保持为字符串路径
+CHROMA_DIR = str(settings.data_path / "chroma_db")
+MODEL_CACHE_DIR = str(settings.data_path / "model_cache")
 CHROMA_COLLECTION = "mall_knowledge"
 EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"
 
+# ModelScope 的缓存布局会在 cache_dir 下再套一层 models/
+_MODEL_SNAPSHOT = os.path.join(
+    MODEL_CACHE_DIR, "models", "BAAI--bge-small-zh-v1.5", "snapshots", "master"
+)
+
 _embeddings = None
+# 按路径缓存 Chroma 客户端。原先每次检索都新建 PersistentClient，
+# 既浪费又容易在并发下争抢文件锁。
+_clients: dict = {}
 
 
 def get_embeddings():
     """获取本地 Embedding 模型（通过 ModelScope 下载，国内可用）。"""
     global _embeddings
     if _embeddings is None:
-        cache_root = os.path.join(os.path.dirname(CHROMA_DIR), "models")
-        local_model = os.path.join(
-            cache_root,
-            "models",
-            "BAAI--bge-small-zh-v1.5",
-            "snapshots",
-            "master",
-        )
-        if os.path.exists(os.path.join(local_model, "config.json")):
-            model_dir = local_model
+        if os.path.exists(os.path.join(_MODEL_SNAPSHOT, "config.json")):
+            model_dir = _MODEL_SNAPSHOT
             print(f"[Embedding] 使用本地缓存模型: {model_dir}")
         else:
             from modelscope import snapshot_download
@@ -45,7 +50,7 @@ def get_embeddings():
             model_dir = snapshot_download(
                 EMBEDDING_MODEL,
                 revision="master",
-                cache_dir=cache_root,
+                cache_dir=MODEL_CACHE_DIR,
             )
         print(f"[Embedding] 模型路径: {model_dir}")
         _embeddings = HuggingFaceEmbeddings(
@@ -79,10 +84,20 @@ def _settings():
     return ChromaSettings(anonymized_telemetry=False)
 
 
+def _get_client():
+    """按路径复用 PersistentClient。"""
+    path = os.path.abspath(CHROMA_DIR)
+    client = _clients.get(path)
+    if client is None:
+        os.makedirs(path, exist_ok=True)
+        client = chromadb.PersistentClient(path=path, settings=_settings())
+        _clients[path] = client
+    return client
+
+
 def get_vectorstore():
     """获取（必要时创建）Chroma 集合；向量由上层显式传入。"""
-    os.makedirs(CHROMA_DIR, exist_ok=True)
-    client = chromadb.PersistentClient(path=CHROMA_DIR, settings=_settings())
+    client = _get_client()
     try:
         return client.get_collection(name=CHROMA_COLLECTION)
     except Exception:
@@ -108,11 +123,17 @@ def _chunk_ids(doc_id, start: int, count: int) -> List[str]:
 
 
 def rebuild_index(documents):
-    """重建向量索引（先清空目录再写入），兼容 seed/初始化场景。"""
-    import shutil
+    """全量重建向量集合，用于索引损坏后的兜底。
 
-    if os.path.exists(CHROMA_DIR):
-        shutil.rmtree(CHROMA_DIR)
+    只删除集合、不删除目录：原来直接 ``shutil.rmtree(CHROMA_DIR)`` 会把
+    已缓存客户端的底层文件删掉，正在运行的进程后续查询会失败。
+    """
+    client = _get_client()
+    try:
+        client.delete_collection(CHROMA_COLLECTION)
+    except Exception as e:
+        print(f"[向量索引] 删除集合失败(忽略): {e}")
+
     vectorstore = get_vectorstore()
     if not documents:
         return vectorstore
