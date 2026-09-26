@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings
 
 
@@ -15,6 +17,21 @@ class Settings(BaseSettings):
             f"mysql+pymysql://{self.mysql_user}:{self.mysql_password}"
             f"@{self.mysql_host}:{self.mysql_port}/{self.mysql_database}"
         )
+
+    # 本地数据目录：向量库 + Embedding 模型缓存。
+    # 刻意放在 Python 包之外。此前这两者都落在 app/ 下面，而 docker-compose 用
+    # named volume 挂载该路径，会把 app/models/*.py 一起遮蔽 —— 重新构建镜像后
+    # 容器里跑的仍然是 volume 中的旧代码。
+    data_dir: str = "data"
+
+    @property
+    def data_path(self) -> Path:
+        """数据目录绝对路径；相对路径按 backend/ 解析，与启动时的工作目录无关。"""
+        path = Path(self.data_dir)
+        if path.is_absolute():
+            return path
+        # config.py -> core -> app -> backend
+        return Path(__file__).resolve().parents[2] / path
 
     # JWT
     jwt_secret_key: str = "change-me"

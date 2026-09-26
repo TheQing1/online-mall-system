@@ -14,11 +14,10 @@
 只靠关键词重合就能全中的评测集是没有意义的，见 eval_dataset 的注释。
 """
 
-from pathlib import Path
-
 import pytest
 
 from app.ai.eval_dataset import EVAL_CASES, KNOWLEDGE_DOCS
+from app.core.config import settings
 
 pytestmark = pytest.mark.rag_quality
 
@@ -30,12 +29,15 @@ TOP_K = 3
 # 期望的召回下限。实测：recall@1 = 90%，recall@3 = 95%，recall@10 = 100%。
 MIN_HIT_RATE = 0.85
 
-_CACHE_ROOT = Path(__file__).resolve().parents[1] / "app" / "models"
+# 模型缓存位于 backend/data/model_cache（在 Python 包之外）
+_MODEL_CACHE = settings.data_path / "model_cache"
 
 
 def _local_model_dir():
     """返回本地已缓存的模型目录；找不到返回 None。"""
-    for candidate in _CACHE_ROOT.rglob("config.json"):
+    if not _MODEL_CACHE.exists():
+        return None
+    for candidate in _MODEL_CACHE.rglob("config.json"):
         if "bge" in str(candidate).lower():
             return candidate.parent
     return None
