@@ -3,6 +3,7 @@ services:
     image: mysql:8.0
     restart: unless-stopped
     environment:
+      # 默认值仅用于本地 demo / 零配置 `docker compose up`，真实部署必须用环境变量覆盖。
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-mall_root_123}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-online_mall}
       TZ: Asia/Shanghai
@@ -13,7 +14,9 @@ services:
       test:
         [
           "CMD-SHELL",
-          "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent",
+          # 用 MYSQL_PWD 传口令而不是 -p"$MYSQL_ROOT_PASSWORD"：后者会把口令写进 argv，
+          # 容器里任何能执行 ps 的进程都能读到。$$ 是 compose 的转义，容器内会展开成 $。
+          "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysqladmin ping -h localhost -uroot --silent",
         ]
       interval: 5s
       timeout: 5s
@@ -28,21 +31,39 @@ services:
       MYSQL_HOST: mysql
       MYSQL_PORT: "3306"
       MYSQL_USER: root
+      # 与 mysql 服务同源，同样只是本地 demo 的默认口令，真实部署必须覆盖。
       MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-mall_root_123}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-online_mall}
+      # 默认值仅用于本地 demo，真实部署必须换成强随机值，否则任何人都能伪造 JWT。
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
       UPLOAD_DIR: /app/static/products
     volumes:
       - ./backend/static/products:/app/static/products
-      - chroma-data:/app/app/chroma_db
-      - model-cache:/app/app/models
+      # 向量库与 Embedding 模型缓存。刻意放在 /app/data 而不是 app/ 包内部：
+      # 挂在 /app/app/models 会遮蔽 app/models/*.py，重建镜像后容器里跑的
+      # 仍是 volume 中的旧代码。首次启动会自动下载模型（约 100MB）。
+      - mall-data:/app/data
     depends_on:
       mysql:
         condition: service_healthy
     ports:
       - "8000:8000"
+    # 镜像里已有 HEALTHCHECK，这里显式覆盖一份以便在 `docker compose ps` 里直接看到状态。
+    # 镜像内没有 curl，复用 /health 的 python 单行探测。
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
 
   web:
     build:
@@ -50,11 +71,11 @@ services:
       dockerfile: web/Dockerfile
     restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "80:80"
 
 volumes:
   mysql-data:
-  chroma-data:
-  model-cache:
+  mall-data:
