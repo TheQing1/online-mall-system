@@ -53,7 +53,11 @@ onMounted(async () => {
       ElMessage.info('订单已处理')
       router.replace(`/orders/${order.value.id}`)
     }
-  } catch {}
+  } catch (e) {
+    // 原来这里是空 catch：加载失败时收银台就是一片空白，用户完全不知道发生了什么
+    ElMessage.error(e.response?.data?.detail || '订单加载失败，请稍后重试')
+    router.replace('/orders')
+  }
 })
 
 async function pay() {
@@ -62,7 +66,9 @@ async function pay() {
     await payOrder(order.value.id)
     ElMessage.success('支付成功')
     router.push(`/orders/${order.value.id}`)
-  } catch {
+  } catch (e) {
+    // 常见原因：订单已被超时自动关单，或状态已变更。必须把原因告诉用户
+    ElMessage.error(e.response?.data?.detail || '支付失败，请稍后重试')
   } finally {
     paying.value = false
   }

@@ -144,20 +144,25 @@ function requireLogin() {
 }
 
 async function addToCart() {
-  if (!requireLogin()) return
+  if (!requireLogin()) return false
   if (!selectedSkuId.value) {
     ElMessage.warning('请先选择完整规格')
-    return
+    return false
   }
   try {
     await cart.addItem(product.value.id, quantity.value, selectedSkuId.value)
     ElMessage.success('已加入购物车')
-  } catch {}
+    return true
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '加入购物车失败')
+    return false
+  }
 }
 
-function buyNow() {
-  addToCart()
-  router.push('/cart')
+async function buyNow() {
+  // 必须等加购真正成功再跳转：原来是不 await 直接 push，
+  // 会与购物车页面自己的拉取竞态，用户可能看到一个空购物车。
+  if (await addToCart()) router.push('/cart')
 }
 
 async function toggleFavorite() {
@@ -172,7 +177,9 @@ async function toggleFavorite() {
       isFav.value = true
       ElMessage.success('收藏成功')
     }
-  } catch {}
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '操作失败，请稍后再试')
+  }
 }
 </script>
 
