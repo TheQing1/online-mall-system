@@ -3,7 +3,7 @@
 > 配套项目：基于 LangChain + RAG + DeepSeek 的 B2C 在线商城
 > 技术栈：Vue3 + Element Plus + Vite + Pinia / FastAPI + SQLAlchemy 2.0 + Pydantic v2 /
 > MySQL 8.0 / ChromaDB / LangChain 0.3.x / BGE `bge-small-zh-v1.5`（本地）/ DeepSeek / JWT + bcrypt /
-> Alembic / Docker Compose + Nginx / pytest（37 个用例）
+> Alembic / Docker Compose + Nginx / pytest（41 个用例，含真实 MySQL 与真实向量模型）
 
 > ⚠️ **本文档的每一条回答都对照当前代码校验过。**
 > 如果你改动了实现（例如换了向量库、调整了 `k` 或阈值、加了限流），
@@ -51,7 +51,7 @@
 
 `api/` 只做参数校验、调用 service、返回结果；`services/` 承载业务规则（下单、库存扣减、状态流转、索引同步）；`models/` 是 SQLAlchemy 模型；`schemas/` 是 DTO；`core/` 放配置、DB、安全、依赖、后台任务。
 
-好处：接口薄、逻辑可复用（前台与后台共用 `order_service`）、可测试。**这也是能写出 37 个测试的前提**——业务逻辑不依赖 FastAPI 的请求对象。
+好处：接口薄、逻辑可复用（前台与后台共用 `order_service`）、可测试。**这也是能写出 41 个测试的前提**——业务逻辑不依赖 FastAPI 的请求对象。
 
 ### 5. 你的具体贡献
 
@@ -363,7 +363,16 @@ WebSocket 需要协议升级、连接池、心跳保活、断线重连，复杂�
 
 后台路由守卫：全局 `beforeEach` 检查 `admin_token`，再调 `/auth/me` 确认角色是 admin，否则跳登录。**前端守卫只是体验层**，真正的权限在后端 `get_current_admin`。
 
-> 已知不一致：前台 router **没有全局守卫**，鉴权散落在各页面的 `onMounted` 里，且有页面漏了。应该照后台的写法统一到 `beforeEach`。
+商城前台现在也改成了全局守卫：路由上标 `meta.requiresAuth`，`beforeEach` 统一拦截并带上
+`redirect` 参数，登录后回到原本要去的页面。改成统一守卫之前是每个页面各写一遍
+`onMounted` 判断，重复不说，`/user/profile` 和 `/user/addresses` **两个页面压根漏了**，
+未登录也能打开然后接口报 401。
+
+> 顺带一个真实的调试案例：审计报告说「组件里直接给 Pinia setup store 的 ref 赋值
+> （`cartStore.count = x`）是破坏响应式的写法，必须走 store action」。我没有直接改，
+> 而是写了个小脚本用项目里已装的 pinia + vue 实测了一遍：赋值生效、`computed` 重算、
+> `watch` 触发。**结论是这个说法不成立，那行代码是对的，于是一个字都没动。**
+> 差一点就把正确的代码「修」坏了——这也是为什么我不想只凭静态阅读下结论。
 
 ### 37. Vue3 用了哪些特性
 
@@ -373,21 +382,46 @@ WebSocket 需要协议升级、连接池、心跳保活、断线重连，复杂�
 
 ## 七、测试、CI 与部署
 
-### 38. 测试怎么做的（37 个用例）
+### 38. 测试怎么做的（41 个用例）
 
 | 文件 | 覆盖 |
 |---|---|
 | `test_auth.py` | 注册/登录/JWT/重复注册/错误密码/无 token |
 | `test_products_cart_orders.py` | 商品列表详情、购物车库存校验、下单→支付→发货→确认收货→退款→审核（含驳回）全流程 |
-| `test_stock.py` | 顺序超卖拦截 + **多线程并发下单**不超卖 |
+| `test_stock.py` | 顺序超卖拦截 + **多线程并发下单**不超卖（SQLite） |
 | `test_security.py` | 地址 404、跨用户读/删会话 403、本人可读、匿名会话与认领、管理端 403/401/200 |
 | `test_regressions.py` | 14 个回归用例，每个对应一个真实修过的缺陷 |
 | `test_ai.py` | 知识增量索引与检索、评测接口统计 |
 | `test_rag_quality.py` | **真实 BGE 模型**下的召回率（无模型时自动 skip） |
+| `test_mysql_integration.py` | **真实 MySQL/InnoDB**：外键、并发防超卖、并发支付幂等（连不上时自动 skip） |
 
-工程要点：每个用例一个独立 SQLite 文件、覆盖 `get_db` 依赖、假 Embedding（确定性哈希向量）避免下载模型和联网。
+工程要点：默认 37 个用例完全自包含——每个用例一个独立 SQLite 文件、覆盖 `get_db` 依赖、
+假 Embedding（确定性哈希向量），**不需要 MySQL 也不需要联网**，所以 CI 跑得很快。
+需要真实数据库/模型的用例用 marker 标注并自动 skip，不会让 CI 变红。
 
-**诚实的局限**（主动讲）：并发测试跑在 SQLite 上，**验证不了 InnoDB 行锁语义**（SQLite 只是串行化写者）；生产用的是 MySQL。要真正验证应该用 MySQL 容器做集成测试。
+### 38b. 为什么还要单独写一套 MySQL 测试（**很值钱的一题**）
+
+因为 SQLite **验证不了生产真正依赖的东西**：SQLite 会把写操作整体串行化，
+永远不会真正并发地去抢同一行；而生产用 MySQL/InnoDB，靠的是行锁 +
+`UPDATE ... WHERE stock >= ?` 的 `rowcount`。在 SQLite 上这条用例通过，
+**并不能证明在 InnoDB 上也没问题**。
+
+`tests/test_mysql_integration.py` 在 MySQL 8.0.43 上实测：
+
+| 场景 | 结果 |
+|---|---|
+| 8 线程并发抢 3 件库存 | 恰好 3 单成功，SKU 与商品聚合库存同时归零 |
+| 同一订单 5 次并发支付 | 恰好 1 次成功，销量只累加 1 |
+| 删除已被下单的商品 | 抛 `IntegrityError`——证明服务层拦截是必要的；SQLite 默认不校验外键，这条约束在 SQLite 上**根本看不出来** |
+
+关键设计：**失败的线程只接受「库存不足 / 状态不允许」这类业务错误**，其他异常一律抛出。
+否则某个代码 bug 让 5 个线程报错，`成功数 == 3` 依然会通过，测试就成了假的通过
+——原来那版 SQLite 用例把所有异常都吞掉了。
+
+写这套测试时踩到一个真实的 MySQL 坑，很值得讲：会话在起线程前已经读过数据，
+而 MySQL 默认隔离级别 **REPEATABLE READ** 会把只读事务的一致性快照固定在那一刻，
+于是并发支付明明成功了，测试里再查却仍是 `pending_pay`。必须先 `rollback()`
+结束该事务再断言。**SQLite 上不会遇到，原来那条断言在 SQLite 版里是「碰巧」成立的。**
 
 ### 39. CI 做了什么
 
@@ -396,29 +430,42 @@ GitHub Actions，两个 job：
 - **backend**：`ruff check` → `pytest --cov=app` → `python -c "from app.main import app"` 冒烟（确认应用能正常导入）；
 - **frontend**：`frontend` / `admin` 矩阵，`npm ci` + `vite build`。
 
-因为测试用 SQLite + 假向量，CI **不需要 MySQL、也不下载 100MB 模型**，所以跑得很快；`test_rag_quality.py` 在没有模型缓存时会自己 skip。
+因为测试用 SQLite + 假向量，CI **不需要 MySQL、也不下载 100MB 模型**，所以跑得很快；
+`test_rag_quality.py` 与 `test_mysql_integration.py` 会各自 skip。
 
-ruff 刻意只开 `F`（如 F821 undefined-name）和 `E9`：**只拦「一定是 bug」的规则、不引风格偏好**，避免 CI 一上来就红。F821 恰好就是本项目踩过的那个坑——`api/users.py` 用了 `status.HTTP_404_NOT_FOUND` 却没 import `status`，导致改/删不存在的地址直接 500。
+ruff 刻意只开 `F`（如 F821 undefined-name）和 `E9`：**只拦「一定是 bug」的规则、不引风格
+偏好**，避免 CI 一上来就红。F821 恰好就是本项目踩过的那个坑——`api/users.py` 用了
+`status.HTTP_404_NOT_FOUND` 却没 import `status`，导致改/删不存在的地址直接 500。
+这个规则集也一次性清掉了 9 个真实的死导入。
 
 ### 40. 怎么部署
 
 `docker compose up -d --build` 起三个服务：
 
-- **mysql**（8.0，healthcheck）；
-- **backend**：entrypoint 等待 MySQL 就绪 → `alembic upgrade head` → `python -m app.core.seed`（幂等）→ uvicorn；
-- **web**：多阶段构建（两个 node 阶段分别 build 商城与后台）→ nginx 托管静态产物，并反代 `/api`、`/static`。
+- **mysql**（8.0，healthcheck，口令通过 `MYSQL_PWD` 传，不出现在 `ps` 里）；
+- **backend**：entrypoint 带**超时上限**地等待 MySQL 就绪（原先是无上限循环，数据库起不来
+  容器就永久挂住）→ `alembic upgrade head` → `python -m app.core.seed`（幂等）→ uvicorn；
+  镜像**非 root 运行**并带 HEALTHCHECK；
+- **web**：多阶段构建（两个 node 阶段 `npm ci` + build）→ nginx 托管静态产物并反代
+  `/api`、`/static`，`web` 会等 backend healthy 才启动。
 
-Nginx 关键配置：`/api/` 反代时 `proxy_buffering off` + `proxy_cache off`（否则 SSE 被缓冲），两个 SPA 各自 `try_files ... /index.html` 兜底。
+Nginx 关键配置：`/api/` 反代 `proxy_buffering off` + `proxy_cache off`（否则 SSE 被缓冲）、
+`client_max_body_size 8m`（默认 1m 会让 2MB 的图片上传直接 413）、gzip、安全响应头
+（CSP 逐条注明放开条件）、带 hash 的 `/assets/` 长缓存。
 
 ### 41. 上线前还差什么（主动列出，显示清楚边界）
 
-**数据库**：补索引（`orders.user_id`、`cart_items.user_id`、`order_items.order_id`、`favorites.user_id`、`products.category_id` 目前都没索引）；`alembic downgrade` 目前是空实现，需要补齐。
+**安全**：HTTPS（HSTS 已在 nginx 注释好，等 TLS 终结后打开）、接口限流、refresh token、
+上传魔数校验；JWT 仍在 localStorage；backend 的 8000 端口直连宿主机，所以
+`--forwarded-allow-ips='*'` 是有折扣的信任，生产要收紧。
 
-**安全**：HTTPS + 安全响应头（HSTS/CSP/X-Frame-Options）、`client_max_body_size`（Nginx 默认 1m 小于代码里 2MB 的上传上限，传图会 413）、接口限流、refresh token、上传魔数校验。
+**数据库**：`alembic downgrade` 目前只有索引迁移是真实可用的，V2 那个大迁移仍是 `pass`。
 
-**稳定性**：后端镜像还是单阶段且 root 运行、没有 HEALTHCHECK；多副本时超时关单任务会重复执行，需要分布式锁；无结构化日志/监控告警。
+**稳定性**：多副本时超时关单任务会在每个副本各跑一份，需要分布式锁；
+无结构化日志/监控告警。
 
-**AI**：模型缓存目录目前落在 Python 包内部（`app/models/models`），compose 用 volume 覆盖它 —— 重新构建镜像后 volume 里的**旧 `app/models/*.py` 会遮蔽新代码**，应该把缓存目录移出包外。
+**前端**：无 TypeScript、无单元测试；各页面里还留着早期手写的 `onMounted` 登录判断
+（已被全局守卫取代，属冗余）。
 
 ---
 
@@ -426,28 +473,29 @@ Nginx 关键配置：`/api/` 反代时 `proxy_buffering off` + `proxy_cache off`
 
 ### 42. 最大的难点
 
-挑最真实的三个讲：
+挑最真实的几个讲：
 
 1. **RAG 链路跑通**：Embedding 模型下载被墙、LangChain 依赖升级破坏兼容 → ModelScope 下载 + 全部锁定 0.3.x；`langchain-chroma` 与 chromadb 1.x 冲突 → 直接调 Chroma 原生客户端。
 2. **SSE 中文流式渲染**：多字节字符在流边界被截断成乱码 → `TextDecoder({stream:true})` + 残留 buffer + 按行缓冲。
-3. **并发正确性**：从「先查库存再扣减」的 check-then-act，改成条件 UPDATE + rowcount 判断，并把同一思路用到订单状态流转上；用多线程用例验证。
+3. **并发正确性**：从「先查库存再扣减」的 check-then-act，改成条件 UPDATE + rowcount 判断，并把同一思路用到订单状态流转上；在 SQLite 和**真实 InnoDB** 上都做了并发验证。
+4. **「查过再改」的价值**：两次都是先动手量，结论和「看起来应该这样」相反——BGE 指令前缀加上去反而更差（回滚）；审计说一堆外键列缺索引，实测 InnoDB 早就自动建好了（不重复造索引）。差点根据静态阅读把正确的代码改坏。
 
 ### 43. 项目有哪些不足，重来会怎么改
 
-- 前端没有 TypeScript、没有单元测试，router 守卫不统一；
-- 测试跑在 SQLite 上，覆盖不到 MySQL 的行锁行为；
+- 前端没有 TypeScript、没有单元测试；页面里还留着已被全局守卫取代的重复鉴权判断；
+- V2 大迁移的 `downgrade()` 还是空实现；
 - JWT 存 localStorage、无限流、无 HTTPS；
-- 模型缓存目录位置不合理（在 Python 包内部）；
+- 多副本时定时关单任务会重复执行；
 - 匿名会话只靠 UUID 保密性。
 
-**重来**：先定接口契约与迁移策略，再写业务；把 AI 客服拆成独立服务与交易模块解耦；测试从第一天就上 CI。
+**重来**：先定接口契约与迁移策略，再写业务；把 AI 客服拆成独立服务与交易模块解耦；测试从第一天就上 CI；**凡是"性能/效果优化"先用数据验证再合入**。
 
 ### 44. 亮点是什么
 
 - **完整闭环**：从前端交互、交易链路到 AI 客服全部打通，不是玩具 Demo；
 - **有可量化的 AI 效果**：自建评测集，recall@1 90% / recall@3 95%，并且做过 A/B 得出「BGE 指令前缀对 v1.5 有害」的负向结论并回滚；
-- **并发正确性**：原子条件更新 + 状态机，有并发测试；
-- **工程化**：分层架构、依赖注入、Alembic 幂等迁移、Docker Compose、37 个测试、CI；
+- **并发正确性经过真实数据库验证**：8 线程抢 3 件恰好成交 3 单、5 次并发支付恰好成功 1 次，失败原因被严格限定为业务错误；
+- **工程化**：分层架构、依赖注入、Alembic 幂等迁移（含可用的 downgrade）、多阶段非 root 镜像、Compose + Nginx、41 个测试、CI；
 - **清楚边界**：知道上线还差什么、瓶颈在哪、怎么扩展。
 
 ### 45. 如果流量上来先瓶颈在哪

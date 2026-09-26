@@ -10,10 +10,14 @@
 
 ## 亮点速览
 
-- **防超卖**：`UPDATE ... WHERE stock >= ?` 原子条件更新 + `rowcount` 判断，配多线程并发测试；
-- **订单状态机**：白名单校验流转合法性，所有流转用条件 UPDATE 做乐观并发控制；
-- **RAG 可量化**：自建 20 条评测集（含口语化改写），实测 **recall@1 = 90%、recall@3 = 95%**；
-- **工程化**：Alembic 幂等迁移、37 个 pytest 用例、GitHub Actions CI、Docker Compose 一键部署。
+- **防超卖**：`UPDATE ... WHERE stock >= ?` 原子条件更新 + `rowcount` 判断，
+  并在**真实 MySQL/InnoDB** 上用 8 线程并发测试验证（恰好 3 单成交）；
+- **订单状态机**：白名单校验流转合法性，所有流转用条件 UPDATE 做乐观并发控制，
+  并发支付幂等性也在真实 InnoDB 上验证过；
+- **RAG 可量化**：自建 20 条评测集（含口语化改写），实测 **recall@1 = 90%、recall@3 = 95%**，
+  并有一个经 A/B 实测被否掉、已回滚的优化（BGE 指令前缀）；
+- **工程化**：Alembic 幂等迁移（含可用的 downgrade）、41 个 pytest 用例、
+  GitHub Actions CI、Docker Compose 一键部署（多阶段镜像 + 非 root + HEALTHCHECK）。
 
 ## 技术栈
 
@@ -28,8 +32,8 @@
 | Embedding | BGE `bge-small-zh-v1.5`（本地部署，ModelScope 下载） |
 | 大模型 | DeepSeek（OpenAI 兼容接口，模型名 `deepseek-flash`） |
 | 认证 | JWT（python-jose + bcrypt） |
-| 部署 | Docker Compose + Nginx（自动迁移 + 种子数据） |
-| 测试 | pytest + httpx（37 个用例：认证/订单全流程/并发扣库存/越权/回归/RAG 召回） |
+| 部署 | Docker Compose + Nginx（多阶段构建、非 root、HEALTHCHECK、自动迁移 + 种子数据） |
+| 测试 | pytest + httpx（41 个用例：认证/订单全流程/越权/回归/RAG 召回/真实 MySQL 并发） |
 | 质量 | ruff + pytest-cov + ESLint + Prettier + GitHub Actions |
 
 ## 功能概览
@@ -142,26 +146,40 @@ MAX_UPLOAD_SIZE=2097152
 │  ├─ app/ai            # RAG 链路（loader/vectorstore/indexer/rag/eval_dataset）
 │  ├─ app/core          # 配置/安全/数据库/后台任务
 │  ├─ alembic           # 数据库迁移
-│  └─ tests             # 37 个 pytest 用例
+│  ├─ tests             # 41 个 pytest 用例
+│  └─ data/             # 运行时生成：向量库 + Embedding 模型缓存（已 gitignore）
 ├─ docs/interview-qa.md # 面试问答（与代码同步维护）
 ├─ .github/workflows    # CI
 ├─ web/                 # Nginx + 前端产物 Dockerfile
 └─ docker-compose.yml
 ```
 
+> `backend/data/`（可用环境变量 `DATA_DIR` 覆盖）刻意放在 Python 包**外面**：
+> 早期向量库与模型缓存位于 `app/` 内部，而 compose 用 named volume 挂载同一路径，
+> 会把 `app/models/*.py` 一起遮蔽——重建镜像后容器里跑的仍是 volume 中的旧代码。
+
 ## 已知不足
 
 诚实地列在这里，避免面试时被动：
 
-- 前端无 TypeScript、无单元测试，商城前台 router **没有全局守卫**（后台有）；
-- 并发测试跑在 SQLite 上，**验证不了 InnoDB 行锁语义**，需要 MySQL 集成测试才严谨；
-- `alembic downgrade` 是空实现；`orders.user_id` 等外键字段缺索引；
-- JWT 存 localStorage；无限流、无 refresh token；部署为 HTTP，无安全响应头；
-- Nginx 默认 `client_max_body_size` 为 1m，小于上传上限 2MB，传图会 413；
-- 后端镜像单阶段且 root 运行、无 HEALTHCHECK；
-- 多副本部署时超时关单任务会重复执行，需要分布式锁；
-- 模型缓存目录位于 Python 包内部（`app/models/models`），compose 用 volume 覆盖它，
-  重新构建镜像后 volume 内的旧 `app/models/*.py` 会遮蔽新代码，应把缓存目录移出包外。
+- 前端无 TypeScript、无单元测试；商城前台的全局路由守卫已是唯一权威判断，
+  但各页面里还留着早期手写的 `onMounted` 登录判断（现在属于冗余代码，可删）；
+- `alembic downgrade` 只有索引迁移是真实可用的；V2 那个大迁移的 `downgrade()` 仍是
+  `pass`（命令成功退出但什么都不回滚），需要补齐；
+- JWT 存 localStorage；无限流、无 refresh token；部署为 HTTP，无 HTTPS，
+  安全响应头已配但 HSTS 仍注释着（等 HTTPS 终结后再开）；
+- compose 把 backend 的 8000 端口直接映射到宿主机（方便用 `/docs` 调试），
+  因此 entrypoint 里的 `--forwarded-allow-ips='*'` 是有折扣的信任：
+  能直连 8000 的客户端可以伪造 `X-Forwarded-For`。生产应去掉该端口映射，
+  或把 `*` 收紧成 nginx 所在网段；
+- 多副本部署时超时关单任务会在每个副本各跑一份，需要分布式锁；
+- 模型缓存首次启动需联网从 ModelScope 下载（约 100MB）；
+- 上传只校验扩展名、不校验文件魔数；商品图存本地盘，生产应上对象存储。
+
+> 已修复、因此不再列在上面的：模型缓存曾放在 Python 包内部（compose 的 volume 会遮蔽
+> `app/models/*.py`，重建镜像后容器仍在跑旧代码）；`orders` 缺少覆盖「每 30 秒定时关单
+> 扫描」的索引；后端镜像 root 运行、无 HEALTHCHECK；nginx 默认 `client_max_body_size`
+> 为 1m 导致传图必然 413；商城前台没有全局路由守卫；`/placeholder.png` 资源缺失。
 
 ## 运行测试
 
@@ -172,8 +190,15 @@ cd backend
 ../.venv/Scripts/python -m pytest
 ```
 
-测试无需 MySQL、也无需联网：用例跑在 SQLite 上，向量部分使用确定性假 Embedding。
-CI 里额外会跑 `ruff check` 与覆盖率。
+**默认 37 个用例完全自包含**：无需 MySQL、无需联网——用例跑在 SQLite 上，
+向量部分使用确定性假 Embedding。CI 里额外跑 `ruff check` 与覆盖率。
+
+另外 4 个用例需要真实 MySQL（并发防超卖 + 幂等支付 + 外键 + InnoDB 校验），
+连不上时自动 skip，不会让 CI 变红：
+
+```bash
+cd backend && pytest -m mysql -v          # 需要本地 MySQL；会自动建/删 <库名>_test
+```
 
 按模块运行：
 
@@ -181,12 +206,26 @@ CI 里额外会跑 `ruff check` 与覆盖率。
 pytest tests/test_security.py -v        # 越权与鉴权
 pytest tests/test_regressions.py -v     # 14 个已修复缺陷的回归
 pytest -m rag_quality -s                # 真实 BGE 模型的召回率（无模型缓存时自动 skip）
+pytest -m mysql -v                      # 真实 MySQL / InnoDB 集成（连不上时自动 skip）
 ```
 
-覆盖范围：注册/登录/JWT、商品列表/详情/SKU、购物车库存校验、
-下单 → 支付 → 发货 → 确认收货 → 退款全流程、取消回补库存、
-**多线程并发下单防超卖**、订单超时自动关单、会话越权（403）、管理端鉴权、
-知识库增量索引与 RAG 检索评测。
+覆盖范围：注册/登录/JWT、商品列表/详情/SKU、购物车库存校验（含累加上限）、
+下单 → 支付 → 发货 → 确认收货 → 退款全流程、取消回补库存、订单超时自动关单、
+会话越权（403）、管理端鉴权、知识库增量索引、RAG 召回率评测，以及
+**真实 InnoDB 上的多线程并发防超卖**与**并发支付幂等性**。
+
+### 在真实 MySQL 上验证过的并发结论
+
+`tests/test_mysql_integration.py` 在 MySQL 8.0.43 上实测：
+
+| 场景 | 结果 |
+|------|------|
+| 8 线程并发抢 3 件库存 | 恰好 3 单成功，SKU 与商品聚合库存同时归零 |
+| 同一订单 5 次并发支付 | 恰好 1 次成功，销量只累加 1 |
+| 删除已被下单的商品 | 抛出 IntegrityError（证明服务层的拦截是必要的） |
+
+失败的线程只接受 `库存不足 / 状态不允许` 这种业务错误；其他异常一律抛出，
+避免「恰好 3 单成功」是因为别的原因失败而侥幸通过。
 
 ### RAG 召回率（真实模型实测）
 
