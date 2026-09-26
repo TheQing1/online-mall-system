@@ -91,7 +91,10 @@ onMounted(async () => {
       const def = addrs.find((a) => a.is_default) || addrs[0]
       selectedAddressId.value = def.id
     }
-  } catch {}
+  } catch (e) {
+    // 空 catch 会让「购物车为空 / 地址加载失败」都表现成一个没有内容的确认页
+    ElMessage.error(e.response?.data?.detail || '结算信息加载失败，请稍后重试')
+  }
 })
 
 async function submitOrder() {

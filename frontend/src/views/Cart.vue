@@ -46,18 +46,21 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import Navbar from '@/components/Navbar.vue'
-import { getCart, updateCartItem, deleteCartItem } from '@/api/cart'
+import { updateCartItem, deleteCartItem } from '@/api/cart'
 import { useAuthStore } from '@/stores/auth'
 import { useCartStore } from '@/stores/cart'
 
 const router = useRouter()
 const auth = useAuthStore()
 const cartStore = useCartStore()
-const items = ref([])
+
+// 单一数据源：本地不再维护一份 items，直接读 store，
+// 避免「页面里一份、store 里一份」两处状态不同步。
+const items = computed(() => cartStore.items)
 
 const totalAmount = computed(() =>
   items.value.reduce((s, i) => s + Number(i.unit_price) * i.quantity, 0).toFixed(2)
@@ -73,18 +76,19 @@ onMounted(() => {
 
 async function fetchCart() {
   try {
-    const res = await getCart()
-    items.value = res.items
-    cartStore.count = res.total_count
-    cartStore.items = res.items
-  } catch {}
+    await cartStore.fetchCart()
+  } catch {
+    ElMessage.error('购物车加载失败，请稍后重试')
+  }
 }
 
 async function updateQty(row) {
   try {
     await updateCartItem(row.id, row.quantity)
-    fetchCart()
-  } catch {
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '修改数量失败')
+  } finally {
+    // 无论成功失败都以服务端为准刷新，失败时把数量回滚成真实值
     fetchCart()
   }
 }
@@ -93,8 +97,11 @@ async function removeItem(id) {
   try {
     await deleteCartItem(id)
     ElMessage.success('已删除')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '删除失败')
+  } finally {
     fetchCart()
-  } catch {}
+  }
 }
 </script>
 

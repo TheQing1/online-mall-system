@@ -117,12 +117,25 @@ export const useChatStore = defineStore('chat', () => {
   async function newConversation() {
     // 清除历史会话，开一个新会话
     try {
-      await fetch(`/api/v1/ai-chat/sessions/${sessionId.value}`, { method: 'DELETE' })
-    } catch {}
+      const token = localStorage.getItem('token')
+      await fetch(`/api/v1/ai-chat/sessions/${sessionId.value}`, {
+        method: 'DELETE',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+    } catch {
+      // 删除失败也照样开新会话：本地状态才是用户直接感知到的东西
+    }
+    reset()
+    loaded.value = true
+  }
+
+  /** 退出登录/切换用户时调用：丢弃会话 id 与内存中的消息。 */
+  function reset() {
     sessionId.value = newSessionId()
     persistSession()
     messages.value = []
-    loaded.value = true
+    loaded.value = false
+    isTyping.value = false
   }
 
   persistSession()
@@ -136,5 +149,6 @@ export const useChatStore = defineStore('chat', () => {
     init,
     sendMessage,
     newConversation,
+    reset,
   }
 })

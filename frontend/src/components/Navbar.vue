@@ -44,7 +44,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Search, ShoppingCart } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
@@ -57,6 +57,16 @@ const keyword = ref('')
 
 const user = computed(() => auth.user)
 const cartCount = computed(() => cart.count)
+
+// 角标数量必须在进入应用时主动拉一次：此前只有「加入购物车」或打开购物车页面
+// 才会填充 cart.count，于是刷新页面后角标总是空的。这里读取失败就当空车，不打扰用户。
+function loadCart() {
+  if (!auth.isLoggedIn) return
+  cart.fetchCart().catch(() => {})
+}
+
+onMounted(loadCart)
+watch(() => auth.isLoggedIn, loadCart)
 
 function search() {
   if (keyword.value.trim()) {

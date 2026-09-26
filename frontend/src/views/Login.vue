@@ -25,12 +25,13 @@
 
 <script setup>
 import { ref, reactive } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Lock } from '@element-plus/icons-vue'
 import Navbar from '@/components/Navbar.vue'
 import { useAuthStore } from '@/stores/auth'
 
+const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const formRef = ref(null)
@@ -49,7 +50,13 @@ async function handleLogin() {
   try {
     await auth.login(form.username, form.password)
     ElMessage.success('登录成功')
-    router.push('/')
+    // 被路由守卫拦下来时会带上 redirect，登录后回到原本要去的页面。
+    // 只接受站内相对路径，避免被构造成 ?redirect=//evil.com 这种开放重定向。
+    const redirect = route.query.redirect
+    const target = typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')
+      ? redirect
+      : '/'
+    router.replace(target)
   } catch (e) {
     const msg = e.response?.data?.detail || '登录失败，请稍后重试'
     ElMessage.error(msg)
