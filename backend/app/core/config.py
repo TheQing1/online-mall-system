@@ -4,6 +4,9 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    # 运行环境。production 下启动自检不通过会直接拒绝启动（见 startup_problems）
+    environment: str = "development"
+
     # Database
     mysql_host: str = "localhost"
     mysql_port: int = 3306
@@ -53,6 +56,29 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+
+
+# 示例默认值：这些密钥一望即知是占位符，绝不能带到线上。
+# 只要 JWT 密钥还是其中之一，任何人都能自己签发 token 登进管理后台。
+INSECURE_JWT_SECRETS = frozenset(
+    {"", "change-me", "change-me-in-production", "your-secret-key-change-me"}
+)
+
+
+def startup_problems(s: Settings) -> list[str]:
+    """启动自检：返回需要人工处理的配置问题，空列表表示没问题。
+
+    刻意做成「启动即失败」而不是「用到的时候才报错」：compose 与 Settings
+    都带了可以直接运行的默认密钥，部署时漏配环境变量不会有任何明显症状，
+    但认证实际上已经被绕过。
+    """
+    problems = []
+    if s.jwt_secret_key in INSECURE_JWT_SECRETS:
+        problems.append(
+            "JWT_SECRET_KEY 仍是示例默认值，任何人都能伪造登录凭证；"
+            "请换成随机字符串（例如 `openssl rand -hex 32` 的输出）"
+        )
+    return problems
 
 
 settings = Settings()

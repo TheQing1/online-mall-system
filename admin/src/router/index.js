@@ -74,11 +74,10 @@ router.beforeEach(async (to, from, next) => {
       return
     }
     try {
-      const axios = (await import('axios')).default
-      const res = await axios.get('/api/v1/auth/me', {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (res.data.role !== 'admin') {
+      const client = (await import('@/api/client')).default
+      // silent：探测失败由守卫自己处理跳转，不需要全局提示与强制刷新
+      const me = await client.get('/auth/me', { silent: true })
+      if (me.role !== 'admin') {
         ElMessage.error('无管理员权限')
         next('/admin/login')
         return

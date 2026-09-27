@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import client from '@/api/client'
 
 export const useCartStore = defineStore('cart', () => {
   const count = ref(0)
@@ -22,12 +23,10 @@ export const useCartStore = defineStore('cart', () => {
       return
     }
     try {
-      const axios = (await import('axios')).default
-      const res = await axios.get('/api/v1/cart', {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      items.value = res.data.items || []
-      count.value = res.data.total_count || 0
+      // silent：角标刷新失败不该弹全局提示，由调用方决定是否提示
+      const data = await client.get('/cart', { silent: true })
+      items.value = data.items || []
+      count.value = data.total_count || 0
     } catch (e) {
       reset()
       throw e
@@ -37,12 +36,11 @@ export const useCartStore = defineStore('cart', () => {
   async function addItem(productId, quantity, skuId = null) {
     const token = localStorage.getItem('token')
     if (!token) return
-    const axios = (await import('axios')).default
-    await axios.post(
-      '/api/v1/cart/items',
-      { product_id: productId, sku_id: skuId, quantity },
-      { headers: { Authorization: `Bearer ${token}` } }
-    )
+    await client.post('/cart/items', {
+      product_id: productId,
+      sku_id: skuId,
+      quantity,
+    })
     await fetchCart()
   }
 

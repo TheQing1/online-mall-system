@@ -10,7 +10,9 @@ import uuid
 
 from app.models.chat import ChatMessage, ChatSession
 from app.models.user import User, UserRole
-from app.core.security import hash_password
+from app.core.security import create_access_token, hash_password
+
+from tests.conftest import create_address, create_product
 
 
 def _login(client, username, password):
@@ -47,7 +49,7 @@ def _make_session(db, owner):
 
 
 def test_update_missing_address_returns_404(client, db):
-    user = _make_user(db, "addr_user")
+    _make_user(db, "addr_user")
     headers = _login(client, "addr_user", "pass1234")
 
     res = client.put(
@@ -196,3 +198,100 @@ def test_admin_endpoints_allow_admin(client, db):
 
     assert res.status_code == 200, res.text
     assert "total_users" in res.json()
+
+
+# --- 被禁用的账号 ---
+
+
+def test_disabled_user_is_treated_as_anonymous(client, db):
+    """修复前 get_optional_user 不校验 is_active：禁用账号后，对方拿着旧 token
+    依然能打开 AI 客服并读到历史，禁用只挡住了 /auth/me。
+    """
+    user = _make_user(db, "chat_disabled")
+    session = _make_session(db, user)
+    # 禁用前先签发一枚 token：模拟「账号被禁用，但客户端还留着登录状态」
+    headers = {"Authorization": f"Bearer {create_access_token({'sub': str(user.id)})}"}
+
+    before = client.get(
+        f"/api/v1/ai-chat/sessions/{session.id}/messages", headers=headers
+    )
+    assert before.status_code == 200, before.text
+
+    user.is_active = False
+    db.commit()
+
+    after = client.get(
+        f"/api/v1/ai-chat/sessions/{session.id}/messages", headers=headers
+    )
+    assert after.status_code == 403, after.text
+
+
+def test_disabled_user_cannot_login(client, db):
+    user = _make_user(db, "login_disabled")
+    user.is_active = False
+    db.commit()
+
+    res = client.post(
+        "/api/v1/auth/login",
+        json={"username": "login_disabled", "password": "pass1234"},
+    )
+
+    assert res.status_code == 403, res.text
+
+
+def test_login_does_not_reveal_whether_username_exists(client, db):
+    """修复前「账号不存在」与「密码错误」是两句不同的提示，等于白送一个
+    用户名枚举接口：攻击者可以先筛出已注册用户名，再针对性地撞库。
+    """
+    _make_user(db, "enum_target")
+
+    existing = client.post(
+        "/api/v1/auth/login",
+        json={"username": "enum_target", "password": "wrong-password"},
+    )
+    missing = client.post(
+        "/api/v1/auth/login",
+        json={"username": "definitely_not_registered", "password": "wrong-password"},
+    )
+
+    assert existing.status_code == missing.status_code == 401
+    assert existing.json()["detail"] == missing.json()["detail"]
+
+
+# --- 订单水平越权 ---
+
+
+def test_cannot_read_or_pay_another_users_order(client, db):
+    """订单接口一律按 user_id 过滤，别人的订单一律 404。
+
+    刻意不返回 403：403 等于告诉对方「这个订单号真实存在」。
+    """
+    owner = _make_user(db, "order_owner")
+    _make_user(db, "order_intruder")
+    product = create_product(db, name="越权商品", skus=[("S", {}, 10, 5)])
+    address = create_address(db, owner)
+    owner_headers = _login(client, "order_owner", "pass1234")
+    intruder_headers = _login(client, "order_intruder", "pass1234")
+
+    client.post(
+        "/api/v1/cart/items",
+        json={"product_id": product.id, "sku_id": product.skus[0].id, "quantity": 1},
+        headers=owner_headers,
+    )
+    order = client.post(
+        "/api/v1/orders", json={"address_id": address.id}, headers=owner_headers
+    ).json()
+
+    assert (
+        client.get(f"/api/v1/orders/{order['id']}", headers=intruder_headers)
+    ).status_code == 404
+    assert (
+        client.post(f"/api/v1/orders/{order['id']}/pay", headers=intruder_headers)
+    ).status_code == 404
+    assert (
+        client.put(f"/api/v1/orders/{order['id']}/cancel", headers=intruder_headers)
+    ).status_code == 404
+
+    # 越权请求不能改变订单状态
+    still = client.get(f"/api/v1/orders/{order['id']}", headers=owner_headers)
+    assert still.json()["status"] == "pending_pay"

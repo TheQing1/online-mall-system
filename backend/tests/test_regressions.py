@@ -5,8 +5,11 @@
 """
 
 from datetime import datetime, timedelta
+from decimal import Decimal
 
-from app.models.order import Order, OrderStatus
+from sqlalchemy import event
+
+from app.models.order import Order, OrderItem, OrderStatus
 from app.models.product import Product, ProductStatus
 from app.models.sku import ProductSku
 from app.models.user import User, UserRole
@@ -332,3 +335,75 @@ def test_admin_user_list_exposes_is_active(client, db, admin, user):
     first = res.json()["items"][0]
     assert "is_active" in first
     assert isinstance(first["is_active"], bool)
+
+
+# --- 订单列表：订单项必须批量取 ---
+
+
+def _seed_order(db, user, index):
+    """直接落库造一笔带订单项的订单，供只关心 SQL 条数的用例使用。"""
+    product = create_product(db, name=f"列表商品{index}", skus=[("S", {}, 10, 3)])
+    sku = product.skus[0]
+    order = Order(
+        user_id=user.id,
+        order_no=f"20260927{index:012d}",
+        total_amount=Decimal("10.00"),
+        status=OrderStatus.PENDING_PAY,
+        address_snapshot={"receiver": "张三"},
+    )
+    db.add(order)
+    db.flush()
+    db.add(
+        OrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            sku_id=sku.id,
+            sku_name=sku.name,
+            sku_spec={},
+            product_name=product.name,
+            price=sku.price,
+            quantity=1,
+        )
+    )
+    db.commit()
+    return order
+
+
+def _order_list_query_count(client, db, headers):
+    """请求订单列表，返回 (响应体, 实际执行的 SQL 条数)。"""
+    bind = db.get_bind()
+    statements = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    # 先让 session 里的对象全部过期。否则对象从标识映射直接命中、懒加载不发 SQL，
+    # 这个用例就变成「怎么改都能过」。
+    db.expire_all()
+    event.listen(bind, "before_cursor_execute", record)
+    try:
+        res = client.get("/api/v1/orders", headers=headers)
+    finally:
+        event.remove(bind, "before_cursor_execute", record)
+    assert res.status_code == 200, res.text
+    return res.json(), statements
+
+
+def test_order_list_does_not_trigger_n_plus_one(client, db, user):
+    """修复前列表查询没有 eager load，而 OrderOut 带 items 字段，
+    每页 N 条订单会额外触发 N 次懒加载（N+1）。
+
+    断言的是「SQL 条数不随订单数量增长」而不是写死一个数字：
+    这样以后改字段、换实现都不会让用例变脆，同时足以抓住真正的 N+1。
+    """
+    headers = auth_header(client, "buyer", "user123")
+    _seed_order(db, user, 1)
+    _, single = _order_list_query_count(client, db, headers)
+
+    for index in range(2, 7):
+        _seed_order(db, user, index)
+    payload, six = _order_list_query_count(client, db, headers)
+
+    assert payload["total"] == 6
+    assert len(payload["items"][0]["items"]) == 1
+    assert len(six) == len(single), (single, six)

@@ -11,7 +11,6 @@ def test_sequential_oversell_blocked(client, db, user):
     product = create_product(db, "限量商品", skus=[("S", {}, 100, 3)])
     sku = product.skus[0]
     addr = create_address(db, user)
-    headers = {"Authorization": "unused"}
     # 直接用服务层，走真实的原子扣减 SQL
     created = 0
     for _ in range(4):

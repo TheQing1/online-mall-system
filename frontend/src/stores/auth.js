@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useCartStore } from '@/stores/cart'
 import { useChatStore } from '@/stores/chat'
+import { login as loginApi, register as registerApi } from '@/api/auth'
 
 /**
  * 读取本地缓存的用户信息。
@@ -31,17 +32,15 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function login(username, password) {
-    const axios = (await import('axios')).default
-    const res = await axios.post('/api/v1/auth/login', { username, password })
-    persist(res.data)
-    return res.data
+    const data = await loginApi(username, password)
+    persist(data)
+    return data
   }
 
   async function register(username, password) {
-    const axios = (await import('axios')).default
-    const res = await axios.post('/api/v1/auth/register', { username, password })
-    persist(res.data)
-    return res.data
+    const data = await registerApi(username, password)
+    persist(data)
+    return data
   }
 
   function logout() {

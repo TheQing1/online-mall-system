@@ -3,7 +3,7 @@
 > 配套项目：基于 LangChain + RAG + DeepSeek 的 B2C 在线商城
 > 技术栈：Vue3 + Element Plus + Vite + Pinia / FastAPI + SQLAlchemy 2.0 + Pydantic v2 /
 > MySQL 8.0 / ChromaDB / LangChain 0.3.x / BGE `bge-small-zh-v1.5`（本地）/ DeepSeek / JWT + bcrypt /
-> Alembic / Docker Compose + Nginx / pytest（41 个用例，含真实 MySQL 与真实向量模型）
+> Alembic / Docker Compose + Nginx / pytest（51 个用例，含真实 MySQL 与真实向量模型）
 
 > ⚠️ **本文档的每一条回答都对照当前代码校验过。**
 > 如果你改动了实现（例如换了向量库、调整了 `k` 或阈值、加了限流），
@@ -51,7 +51,7 @@
 
 `api/` 只做参数校验、调用 service、返回结果；`services/` 承载业务规则（下单、库存扣减、状态流转、索引同步）；`models/` 是 SQLAlchemy 模型；`schemas/` 是 DTO；`core/` 放配置、DB、安全、依赖、后台任务。
 
-好处：接口薄、逻辑可复用（前台与后台共用 `order_service`）、可测试。**这也是能写出 41 个测试的前提**——业务逻辑不依赖 FastAPI 的请求对象。
+好处：接口薄、逻辑可复用（前台与后台共用 `order_service`）、可测试。**这也是能写出 51 个测试的前提**——业务逻辑不依赖 FastAPI 的请求对象。
 
 ### 5. 你的具体贡献
 
@@ -382,20 +382,21 @@ WebSocket 需要协议升级、连接池、心跳保活、断线重连，复杂�
 
 ## 七、测试、CI 与部署
 
-### 38. 测试怎么做的（41 个用例）
+### 38. 测试怎么做的（51 个用例）
 
 | 文件 | 覆盖 |
 |---|---|
 | `test_auth.py` | 注册/登录/JWT/重复注册/错误密码/无 token |
-| `test_products_cart_orders.py` | 商品列表详情、购物车库存校验、下单→支付→发货→确认收货→退款→审核（含驳回）全流程 |
+| `test_products_cart_orders.py` | 商品列表详情、购物车库存校验、SKU 归属校验、分页上限、下单→支付→发货→确认收货→退款→审核（含驳回）全流程 |
 | `test_stock.py` | 顺序超卖拦截 + **多线程并发下单**不超卖（SQLite） |
-| `test_security.py` | 地址 404、跨用户读/删会话 403、本人可读、匿名会话与认领、管理端 403/401/200 |
-| `test_regressions.py` | 14 个回归用例，每个对应一个真实修过的缺陷 |
+| `test_security.py` | 地址 404、跨用户读/删会话 403、本人可读、匿名会话与认领、**禁用账号失效**、**用户名枚举**、**订单水平越权**、管理端 403/401/200 |
+| `test_regressions.py` | 15 个回归用例，每个对应一个真实修过的缺陷（含订单列表 N+1） |
+| `test_config.py` | 启动自检：默认 JWT 密钥在 production 下拒绝启动 |
 | `test_ai.py` | 知识增量索引与检索、评测接口统计 |
 | `test_rag_quality.py` | **真实 BGE 模型**下的召回率（无模型时自动 skip） |
 | `test_mysql_integration.py` | **真实 MySQL/InnoDB**：外键、并发防超卖、并发支付幂等（连不上时自动 skip） |
 
-工程要点：默认 37 个用例完全自包含——每个用例一个独立 SQLite 文件、覆盖 `get_db` 依赖、
+工程要点：默认 47 个用例完全自包含——每个用例一个独立 SQLite 文件、覆盖 `get_db` 依赖、
 假 Embedding（确定性哈希向量），**不需要 MySQL 也不需要联网**，所以 CI 跑得很快。
 需要真实数据库/模型的用例用 marker 标注并自动 skip，不会让 CI 变红。
 
@@ -495,7 +496,7 @@ Nginx 关键配置：`/api/` 反代 `proxy_buffering off` + `proxy_cache off`（
 - **完整闭环**：从前端交互、交易链路到 AI 客服全部打通，不是玩具 Demo；
 - **有可量化的 AI 效果**：自建评测集，recall@1 90% / recall@3 95%，并且做过 A/B 得出「BGE 指令前缀对 v1.5 有害」的负向结论并回滚；
 - **并发正确性经过真实数据库验证**：8 线程抢 3 件恰好成交 3 单、5 次并发支付恰好成功 1 次，失败原因被严格限定为业务错误；
-- **工程化**：分层架构、依赖注入、Alembic 幂等迁移（含可用的 downgrade）、多阶段非 root 镜像、Compose + Nginx、41 个测试、CI；
+- **工程化**：分层架构、依赖注入、Alembic 幂等迁移（含可用的 downgrade）、多阶段非 root 镜像、Compose + Nginx、51 个测试（覆盖率 72%）、CI；
 - **清楚边界**：知道上线还差什么、瓶颈在哪、怎么扩展。
 
 ### 45. 如果流量上来先瓶颈在哪

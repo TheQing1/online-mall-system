@@ -49,4 +49,10 @@ def get_optional_user(
     user_id = payload.get("sub")
     if user_id is None:
         return None
-    return db.query(User).filter(User.id == int(user_id)).first()
+    # 被禁用的账号一律按「未登录」处理：否则禁用只挡住了 /auth/me，
+    # 手上还留着旧 token 的人依然能用 AI 客服，甚至读自己名下的会话。
+    return (
+        db.query(User)
+        .filter(User.id == int(user_id), User.is_active.is_(True))
+        .first()
+    )

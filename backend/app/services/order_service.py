@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from sqlalchemy import update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from fastapi import HTTPException, status
 
 from app.core.config import settings
@@ -258,8 +258,11 @@ def _get_user_order(db: Session, order_id: int, user) -> Optional[Order]:
 def get_user_orders(
     db: Session, user, page: int = 1, page_size: int = 10, status_filter=None
 ):
+    # 订单项必须批量取：响应模型带 items，逐条懒加载的话一页 10 条订单
+    # 会额外产生 10 条 SQL（N+1）。
     query = (
         db.query(Order)
+        .options(selectinload(Order.items))
         .filter(Order.user_id == user.id)
         .order_by(Order.created_at.desc())
     )
@@ -293,7 +296,11 @@ def admin_get_orders(
     status_filter: Optional[str] = None,
     order_no: Optional[str] = None,
 ):
-    query = db.query(Order).order_by(Order.created_at.desc())
+    query = (
+        db.query(Order)
+        .options(selectinload(Order.items))
+        .order_by(Order.created_at.desc())
+    )
     if status_filter:
         try:
             query = query.filter(Order.status == OrderStatus(status_filter))
@@ -358,6 +365,7 @@ def admin_update_order_status(
 def admin_get_refund_orders(db: Session, page: int = 1, page_size: int = 20):
     query = (
         db.query(Order)
+        .options(selectinload(Order.items))
         .filter(Order.status == OrderStatus.REFUNDING)
         .order_by(Order.created_at.desc())
     )

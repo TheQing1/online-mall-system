@@ -21,13 +21,11 @@ def register_user(db: Session, username: str, password: str, email: Optional[str
 
 def authenticate_user(db: Session, username: str, password: str) -> Optional[User]:
     user = db.query(User).filter(User.username == username).first()
-    if not user:
+    # 「账号不存在」和「密码错误」必须返回同一句话：分开提示等于白送攻击者
+    # 一个用户名枚举接口（先试出哪些用户名已注册，再针对性地撞库）。
+    if not user or not verify_password(password, user.password_hash):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="账号不存在"
-        )
-    if not verify_password(password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="密码错误"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误"
         )
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账号已被禁用")
