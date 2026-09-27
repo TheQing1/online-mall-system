@@ -15,9 +15,10 @@
   并在**真实 MySQL/InnoDB** 上用 8 线程并发测试验证（恰好 3 单成交）；
 - **订单状态机**：白名单校验流转合法性，所有流转用条件 UPDATE 做乐观并发控制，
   并发支付幂等性也在真实 InnoDB 上验证过；
-- **RAG 可量化**：自建 20 条评测集（含口语化改写），实测 **recall@1 = 90%、recall@3 = 95%**，
-  并有一个经 A/B 实测被否掉、已回滚的优化（BGE 指令前缀）；
-- **工程化**：Alembic 幂等迁移（含可用的 downgrade）、51 个 pytest 用例（覆盖率 72%）、
+- **RAG 可量化**：自建 22 篇知识文档 + **51 条评测集**（其中 31 条是口语化改写、
+  还刻意放了多组近义干扰文档），向量召回 recall@1 84.3% → 引入 **BM25 混合检索后
+  recall@1 = 90.2%、recall@3 = 98.0%**（同一套评测集、同一份代码路径）；
+- **工程化**：Alembic 幂等迁移（含可用的 downgrade）、53 个 pytest 用例（覆盖率 72%）、
   GitHub Actions CI、Docker Compose 一键部署（多阶段镜像 + 非 root + HEALTHCHECK）。
 
 ## 技术栈
@@ -29,12 +30,13 @@
 | 后端 API | FastAPI + SQLAlchemy 2.0 + Pydantic v2 |
 | 数据库 | MySQL 8.0（Alembic 迁移管理，14 张表） |
 | 向量存储 | ChromaDB（原生客户端，本地持久化） |
-| AI 框架 | LangChain 0.3.x（RAG：切片 → BGE Embedding → 检索 → 生成） |
+| 检索 | 向量召回 + BM25（jieba 分词）加权融合，见 `app/ai/retriever.py` |
+| AI 框架 | LangChain 0.3.x（RAG：切片 → BGE Embedding → 混合检索 → 生成） |
 | Embedding | BGE `bge-small-zh-v1.5`（本地部署，ModelScope 下载） |
 | 大模型 | DeepSeek（OpenAI 兼容接口，模型名 `deepseek-flash`） |
 | 认证 | JWT（python-jose + bcrypt） |
 | 部署 | Docker Compose + Nginx（多阶段构建、非 root、HEALTHCHECK、自动迁移 + 种子数据） |
-| 测试 | pytest + httpx（51 个用例：认证/订单全流程/越权/回归/RAG 召回/真实 MySQL 并发） |
+| 测试 | pytest + httpx（53 个用例：认证/订单全流程/越权/回归/RAG 召回/真实 MySQL 并发） |
 | 质量 | ruff + pytest-cov + ESLint + Prettier + GitHub Actions |
 
 ## 功能概览
@@ -147,7 +149,7 @@ MAX_UPLOAD_SIZE=2097152
 │  ├─ app/ai            # RAG 链路（loader/vectorstore/indexer/rag/eval_dataset）
 │  ├─ app/core          # 配置/安全/数据库/后台任务
 │  ├─ alembic           # 数据库迁移
-│  ├─ tests             # 51 个 pytest 用例
+│  ├─ tests             # 53 个 pytest 用例
 │  └─ data/             # 运行时生成：向量库 + Embedding 模型缓存（已 gitignore）
 ├─ docs/interview-qa.md # 面试问答（与代码同步维护）
 ├─ .github/workflows    # CI
@@ -163,6 +165,11 @@ MAX_UPLOAD_SIZE=2097152
 
 诚实地列在这里，避免面试时被动：
 
+- 检索只做到了**混合召回**（向量 + BM25 加权融合），还没接交叉编码器重排
+  （如 `bge-reranker-base`）：插入点很明确，就是 `app/ai/retriever.py` 融合排序之后
+  再过一遍 CrossEncoder，预期能把 recall@1 再往上推一档。但本机从 ModelScope 拉
+  1.1GB 模型的速度只有约 100KB/s，这一轮没能拿到可信的对比数据，
+  所以**没有把没测过的优化写进代码**；
 - 前端无 TypeScript、无单元测试；商城前台的全局路由守卫已是唯一权威判断，
   但各页面里还留着早期手写的 `onMounted` 登录判断（现在属于冗余代码，可删）；
 - `alembic downgrade` 只有索引迁移是真实可用的；V2 那个大迁移的 `downgrade()` 仍是
@@ -191,7 +198,7 @@ cd backend
 ../.venv/Scripts/python -m pytest
 ```
 
-**默认 47 个用例完全自包含**：无需 MySQL、无需联网——用例跑在 SQLite 上，
+**默认 49 个用例完全自包含**：无需 MySQL、无需联网——用例跑在 SQLite 上，
 向量部分使用确定性假 Embedding。CI 里额外跑 `ruff check` 与覆盖率。
 
 另外 4 个用例需要真实 MySQL（并发防超卖 + 幂等支付 + 外键 + InnoDB 校验），
@@ -230,18 +237,29 @@ pytest -m mysql -v                      # 真实 MySQL / InnoDB 集成（连不�
 
 ### RAG 召回率（真实模型实测）
 
-`tests/test_rag_quality.py` 加载真实的 `bge-small-zh-v1.5`，对 10 篇知识文档建索引，
-按生产同款参数（余弦距离 ≤ 0.7、top-3）在 **20 条评测用例**（一半为口语化改写）上评测：
+`tests/test_rag_quality.py` 加载真实的 `bge-small-zh-v1.5`，对 **22 篇**知识文档建索引，
+按生产同款参数（相关性下限 0.3 ≡ 原余弦距离 0.7、top-3）在 **51 条评测用例**上评测。
+评测与线上生成调用的是同一个 `retriever.retrieve()`，而不是各写一份。
 
-| 指标 | 数值 |
-|------|------|
-| recall@1 | 90% |
-| recall@3（生产取值） | 95% |
-| recall@10 | 100% |
+| 检索策略 | recall@1 | recall@3（生产取值） |
+|----------|----------|---------------------|
+| 纯向量 | 84.3% | 94.1%（48/51） |
+| **向量 + BM25 融合（当前默认）** | **90.2%** | **98.0%（50/51）** |
 
-> 评测集规模有限，该数字应视为冒烟测试而非基准。另外实测确认：
-> BGE **v1.5 不需要** query 指令前缀（那是 v1 的要求），加上反而使平均余弦距离
-> 从 0.357 劣化到 0.401，因此代码中刻意不加，详见 `app/ai/vectorstore.py` 注释。
+融合权重扫过 5 组（0.7/0.3 → 0.3/0.7），0.6/0.4 在 recall@1 与 recall@3 上同时最优。
+`test_hybrid_retrieval_is_not_worse_than_vector` 就是防止后续调参把它调坏的回归用例。
+
+两个真实的坑（都是被这套评测用数据抓出来的）：
+
+- `BM25Okapi` 的 IDF 在「某个词出现在超过一半文档里」时是**负数**，于是命中了这个词的
+  文档得分反而低于完全没命中的文档（小语料上尤其致命，而本项目的知识库刚好充满
+  「商品」「订单」「配送」这类高频词），因此改用 IDF 恒非负的 `BM25Plus`；
+- BGE **v1.5 不需要** query 指令前缀（那是 v1 的要求），加上反而使平均余弦距离
+  从 0.357 劣化到 0.401，因此代码中刻意不加，详见 `app/ai/vectorstore.py` 注释。
+
+> 评测集从 20 条扩到 51 条、文档从 10 篇扩到 22 篇并加入近义干扰文档之后，
+> 纯向量的绝对分数比早期版本低——这是评测变难的正常结果，也让「混合检索到底值不值」
+> 有了可比的数据。
 
 ## 代码质量
 

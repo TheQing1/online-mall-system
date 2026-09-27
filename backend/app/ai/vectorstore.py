@@ -35,6 +35,19 @@ _embeddings = None
 # 既浪费又容易在并发下争抢文件锁。
 _clients: dict = {}
 
+# 写入代数：每次向量库发生变化都 +1。BM25 索引（retriever 里的内存索引）
+# 靠它判断是否需要重建，避免「知识库更新了但词频索引还是旧的」。
+_index_generation = 0
+
+
+def index_generation() -> int:
+    return _index_generation
+
+
+def _bump_index_generation() -> None:
+    global _index_generation
+    _index_generation += 1
+
 
 def get_embeddings():
     """获取本地 Embedding 模型（通过 ModelScope 下载，国内可用）。"""
@@ -133,6 +146,7 @@ def rebuild_index(documents):
         client.delete_collection(CHROMA_COLLECTION)
     except Exception as e:
         print(f"[向量索引] 删除集合失败(忽略): {e}")
+    _bump_index_generation()
 
     vectorstore = get_vectorstore()
     if not documents:
@@ -153,6 +167,7 @@ def rebuild_index(documents):
 def replace_document_vectors(doc_id, documents):
     """增量重建单个知识文档：删除该文档旧向量后批量写入新切片。"""
     vectorstore = get_vectorstore()
+    _bump_index_generation()
     if doc_id is not None:
         try:
             vectorstore.delete(where={"id": int(doc_id)})
@@ -173,6 +188,7 @@ def delete_document_vectors(doc_id):
     if doc_id is None:
         return
     vectorstore = get_vectorstore()
+    _bump_index_generation()
     try:
         vectorstore.delete(where={"id": int(doc_id)})
     except Exception as e:
