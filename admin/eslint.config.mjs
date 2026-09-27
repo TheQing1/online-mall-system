@@ -1,8 +1,7 @@
 // ESLint 扁平配置（ESLint 9+）。
 //
-// 启用方式（需要联网装依赖，装完 package-lock.json 会一并更新）：
-//   npm install -D eslint @eslint/js eslint-plugin-vue prettier
-//   npx eslint .
+// 依赖已在 devDependencies 里（eslint / @eslint/js / eslint-plugin-vue / prettier），
+// 直接 `npm run lint`（等价于 `npx eslint .`）；CI 里也会跑同一条命令。
 //
 // 只开「正确性」规则、不引格式规则：格式交给 Prettier，
 // 避免两套工具互相打架产生大量无关改动。

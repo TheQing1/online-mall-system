@@ -130,7 +130,7 @@ onMounted(async () => {
         isFav.value = !!res.items.find((p) => p.id === Number(route.params.id))
       } catch {}
     }
-  } catch (e) {
+  } catch {
     ElMessage.error('商品不存在或已下架')
   }
 })

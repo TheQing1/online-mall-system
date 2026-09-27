@@ -426,13 +426,20 @@ WebSocket 需要协议升级、连接池、心跳保活、断线重连，复杂�
 
 ### 39. CI 做了什么
 
-GitHub Actions，两个 job：
+GitHub Actions，四个 job：
 
-- **backend**：`ruff check` → `pytest --cov=app` → `python -c "from app.main import app"` 冒烟（确认应用能正常导入）；
-- **frontend**：`frontend` / `admin` 矩阵，`npm ci` + `vite build`。
+- **backend**：`ruff check` → `pytest --cov=app --cov-fail-under=70`（覆盖率是门槛，不是装饰）
+  → `python -c "from app.main import app"` 冒烟（确认应用能正常导入）；
+- **mysql-integration**：带 MySQL 8 service 容器跑 `pytest -m mysql`，把「8 线程抢 3 件库存
+  恰好成交 3 单」「5 次并发支付恰好成功 1 次」变成每次提交都能复现的证据。因为这套用例
+  连不上库时会 **skip（而不是失败）**，所以这一步显式断言日志里不能出现 `skipped`
+  ——否则 host/口令配错时会得到一个绿色的假通过；
+- **rag-quality**：**手动触发**（`workflow_dispatch`）才跑 `pytest -m rag_quality`。
+  它要下载约 100MB 的 BGE 模型，放进每次 push 的流水线会又慢又容易因网络抖动变红；
+- **frontend**：`frontend` / `admin` 矩阵，`npm ci` + `npm run lint` + `vite build`。
 
-因为测试用 SQLite + 假向量，CI **不需要 MySQL、也不下载 100MB 模型**，所以跑得很快；
-`test_rag_quality.py` 与 `test_mysql_integration.py` 会各自 skip。
+因为默认那 47 个用例跑在 SQLite + 假向量上，backend job **不需要 MySQL、也不下载
+100MB 模型**，所以跑得很快；需要真实数据库/模型的用例各自由上面两个独立 job 负责。
 
 ruff 刻意只开 `F`（如 F821 undefined-name）和 `E9`：**只拦「一定是 bug」的规则、不引风格
 偏好**，避免 CI 一上来就红。F821 恰好就是本项目踩过的那个坑——`api/users.py` 用了

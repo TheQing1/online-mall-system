@@ -71,7 +71,8 @@ export const useChatStore = defineStore('chat', () => {
       let buffer = ''
       let finished = false
 
-      while (true) {
+      // 收到 [DONE]/[ERROR] 后就没必要继续读了：服务器在这之后只会关闭连接
+      while (!finished) {
         const { done, value } = await reader.read()
         if (done) break
         buffer += decoder.decode(value, { stream: true })
@@ -106,6 +107,8 @@ export const useChatStore = defineStore('chat', () => {
           }
         }
       }
+      // 提前跳出循环时要主动取消，否则这条连接不会被回收
+      if (finished) await reader.cancel()
     } catch {
       const lastMsg = messages.value[messages.value.length - 1]
       if (lastMsg) lastMsg.content = '抱歉，AI 客服暂时不可用，请稍后再试。'
