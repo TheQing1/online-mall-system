@@ -247,20 +247,15 @@ pytest -m mysql -v                      # 真实 MySQL / InnoDB 集成（连不�
 
 ```bash
 cd backend && ruff check .                      # 静态检查（F/E9：只拦真 bug）
-cd backend && pytest --cov=app --cov-report=term-missing
+cd backend && pytest --cov=app --cov-report=term-missing   # 当前 72%，CI 门槛 70%
 
-cd frontend && npm run build                    # 两个前端都需能构建通过
-cd admin    && npm run build
+cd frontend && npm run lint && npm run build    # 两个前端都需 lint + 构建通过
+cd admin    && npm run lint && npm run build
 ```
 
-ESLint / Prettier 配置已就绪（`eslint.config.mjs` / `.prettierrc`），
-但依赖尚未写入 `package.json`——因为 `npm ci` 要求 lockfile 与 `package.json` 严格同步。
-启用方式：
-
-```bash
-cd frontend && npm install -D eslint @eslint/js eslint-plugin-vue prettier && npx eslint .
-cd admin    && npm install -D eslint @eslint/js eslint-plugin-vue prettier && npx eslint .
-```
+ESLint / Prettier 配置与依赖都已就位（`eslint.config.mjs` / `.prettierrc` +
+`devDependencies`），`npm run lint` 与 `npm run format` 直接可用，CI 里也会跑 lint。
+规则只开「正确性」、不引格式规则，格式交给 Prettier，避免两套工具互相打架。
 
 ## 核心设计说明
 
