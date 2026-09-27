@@ -10,7 +10,7 @@ from langchain_openai import ChatOpenAI
 from sqlalchemy.orm import Session
 
 from app.ai.prompts import CHAT_PROMPT
-from app.ai.vectorstore import search_similar
+from app.ai.retriever import retrieve
 from app.core.config import settings
 from app.models.product import Product
 from app.services import chat_service, product_service
@@ -103,10 +103,10 @@ async def generate_stream(
     history = chat_service.get_history_text(db, session_id, limit=6)
     rewritten = await asyncio.to_thread(_rewrite_query, query, history)
 
-    results = search_similar(rewritten, k=3)
+    results = retrieve(rewritten, k=3)
     context_parts = []
     for doc, score in results:
-        if score <= settings.rag_score_threshold:
+        if score >= settings.rag_min_relevance:
             context_parts.append(
                 f"【{doc.metadata.get('title', '未知')}】\n{doc.page_content}\n"
             )

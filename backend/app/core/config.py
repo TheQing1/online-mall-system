@@ -47,8 +47,18 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     # 官方模型名现为 deepseek-flash（旧名 deepseek-v4-flash 仍被接受但已退役）
     deepseek_model: str = "deepseek-flash"
-    # Chroma 返回的是余弦距离（0 表示完全相同），因此这里是「距离上限」而非相似度下限
-    rag_score_threshold: float = 0.7
+
+    # --- RAG 检索 ---
+    # vector：只用向量召回；hybrid：向量 + BM25 融合（见 app/ai/retriever.py）
+    # 默认 hybrid 是实测结论：22 篇文档 / 51 条用例上 recall@1 84.3% → 90.2%。
+    rag_retrieval_mode: str = "hybrid"
+    # 相关性下限，0~1 且**越大越严格**（与 Chroma 的余弦距离相反）。
+    # 0.3 恰好等价于原来「余弦距离 ≤ 0.7」的取值，方便对比两种模式。
+    rag_min_relevance: float = 0.3
+    # 混合模式的权重：扫过 0.7/0.3 ~ 0.3/0.7 五组，0.6/0.4 的 recall@1 与
+    # recall@3 同时最优（见 tests/test_rag_quality.py 的对比输出）。
+    rag_vector_weight: float = 0.6
+    rag_bm25_weight: float = 0.4
 
     # File Upload
     upload_dir: str = "static/products"

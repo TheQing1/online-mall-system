@@ -16,5 +16,8 @@ langchain-huggingface==0.1.2
 modelscope
 sentence-transformers
 chromadb==1.5.9
+# 混合检索：jieba 做中文分词，rank_bm25 做词频召回（见 app/ai/retriever.py）
+jieba==0.42.1
+rank-bm25==0.2.2
 python-dotenv==1.0.1
 aiofiles==24.1.0

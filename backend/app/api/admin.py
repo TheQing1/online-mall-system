@@ -14,7 +14,7 @@ from fastapi import (
 from sqlalchemy.orm import Session
 
 from app.ai import indexer
-from app.ai.vectorstore import search_similar
+from app.ai.retriever import retrieve
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_current_admin
@@ -402,13 +402,13 @@ def run_eval(
     cases = db.query(EvalTestCase).all()
     results = []
     for case in cases:
-        retrieved = search_similar(case.question, k=5)
+        retrieved = retrieve(case.question, k=5)
         titles = [
             doc.metadata.get("title", "")
             for doc, score in retrieved
-            if score <= settings.rag_score_threshold
+            if score >= settings.rag_min_relevance
         ]
-        best_score = min((float(s) for _, s in retrieved), default=None)
+        best_score = max((float(s) for _, s in retrieved), default=None)
         hit = case.expected_title in titles
         results.append(
             {

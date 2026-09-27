@@ -96,3 +96,37 @@ def test_rag_eval_endpoint(client, db, tmp_path, monkeypatch, admin):
     assert isinstance(result["retrieved_titles"], list)
     # 该文档确实被索引了，至少要能召回一条
     assert result["retrieved_titles"], payload
+
+
+def test_bm25_index_refreshes_after_knowledge_update(db, tmp_path, monkeypatch):
+    """BM25 是内存索引：知识库改完必须能立刻检索到新内容。
+
+    缓存如果只按「片段数量」判断是否重建，改内容但片段数不变时就会一直
+    命中旧索引——表现为客服拿已下线的旧政策回答用户。这里改成按向量库的
+    「写入代数」判断，本用例就是这个机制的回归测试。
+    """
+    from app.ai import retriever
+
+    _seed_vectorstore(db, tmp_path, monkeypatch)
+
+    doc = KnowledgeDoc(
+        title="配送说明",
+        content="偏远地区暂不支持配送。",
+        category=KnowledgeCategory.ORDER,
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    indexer.sync_knowledge_doc(db, doc)
+
+    assert retriever.bm25_search("偏远地区支持配送吗", limit=3)
+
+    doc.content = "全国所有地区均已支持配送。"
+    db.commit()
+    indexer.sync_knowledge_doc(db, doc)
+
+    hits = retriever.bm25_search("偏远地区配送", limit=5)
+    assert hits, "更新后的内容应当仍能召回"
+    assert all("暂不支持" not in document.page_content for document, _score in hits), (
+        "BM25 索引没跟上更新，仍然召回旧内容"
+    )
