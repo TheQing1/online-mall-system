@@ -1,8 +1,9 @@
 # Online Mall —— 基于 LangChain 的 AI 智能客服商城系统（V2）
 
-[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
-
-> 把上面的 `OWNER/REPO` 换成你的仓库路径即可显示构建徽章。
+[![CI](https://github.com/TheQing1/online-mall-system/actions/workflows/ci.yml/badge.svg)](https://github.com/TheQing1/online-mall-system/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB.svg)](backend/requirements.txt)
+[![Vue](https://img.shields.io/badge/Vue-3-42b883.svg)](frontend/package.json)
 
 综合 B2C 在线商城，集成了基于 **LangChain + RAG + DeepSeek** 的 AI 智能客服，
 并补齐了商品 SKU、页面化模拟支付、订单超时关单、退款、收藏、Banner 运营、
