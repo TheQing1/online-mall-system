@@ -1,16 +1,26 @@
 from contextlib import asynccontextmanager
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
 
-from app.core.config import settings
+from app.core.config import settings, startup_problems
 from app.core.tasks import start_background_tasks
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    problems = startup_problems(settings)
+    if problems:
+        # 生产环境直接拒绝启动；开发环境只告警，保证 clone 下来就能跑。
+        if settings.environment.lower() in {"production", "prod"}:
+            raise RuntimeError("配置自检未通过：" + "；".join(problems))
+        for problem in problems:
+            logger.warning("配置自检：%s", problem)
     async for _ in start_background_tasks(app):
         yield
 

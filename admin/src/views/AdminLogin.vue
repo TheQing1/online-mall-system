@@ -22,7 +22,7 @@
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { User, Lock } from '@element-plus/icons-vue'
-import axios from 'axios'
+import client from '@/api/client'
 
 const router = useRouter()
 const loading = ref(false)
@@ -33,12 +33,12 @@ async function handleLogin() {
   error.value = ''
   loading.value = true
   try {
-    const res = await axios.post('/api/v1/auth/login', form)
-    if (res.data.user.role !== 'admin') {
+    const data = await client.post('/auth/login', form)
+    if (data.user.role !== 'admin') {
       error.value = '无管理员权限'
       return
     }
-    localStorage.setItem('admin_token', res.data.access_token)
+    localStorage.setItem('admin_token', data.access_token)
     router.push('/admin')
   } catch (e) {
     error.value = e.response?.data?.detail || '登录失败'

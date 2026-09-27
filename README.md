@@ -17,7 +17,7 @@
   并发支付幂等性也在真实 InnoDB 上验证过；
 - **RAG 可量化**：自建 20 条评测集（含口语化改写），实测 **recall@1 = 90%、recall@3 = 95%**，
   并有一个经 A/B 实测被否掉、已回滚的优化（BGE 指令前缀）；
-- **工程化**：Alembic 幂等迁移（含可用的 downgrade）、41 个 pytest 用例、
+- **工程化**：Alembic 幂等迁移（含可用的 downgrade）、51 个 pytest 用例（覆盖率 72%）、
   GitHub Actions CI、Docker Compose 一键部署（多阶段镜像 + 非 root + HEALTHCHECK）。
 
 ## 技术栈
@@ -34,7 +34,7 @@
 | 大模型 | DeepSeek（OpenAI 兼容接口，模型名 `deepseek-flash`） |
 | 认证 | JWT（python-jose + bcrypt） |
 | 部署 | Docker Compose + Nginx（多阶段构建、非 root、HEALTHCHECK、自动迁移 + 种子数据） |
-| 测试 | pytest + httpx（41 个用例：认证/订单全流程/越权/回归/RAG 召回/真实 MySQL 并发） |
+| 测试 | pytest + httpx（51 个用例：认证/订单全流程/越权/回归/RAG 召回/真实 MySQL 并发） |
 | 质量 | ruff + pytest-cov + ESLint + Prettier + GitHub Actions |
 
 ## 功能概览
@@ -147,7 +147,7 @@ MAX_UPLOAD_SIZE=2097152
 │  ├─ app/ai            # RAG 链路（loader/vectorstore/indexer/rag/eval_dataset）
 │  ├─ app/core          # 配置/安全/数据库/后台任务
 │  ├─ alembic           # 数据库迁移
-│  ├─ tests             # 41 个 pytest 用例
+│  ├─ tests             # 51 个 pytest 用例
 │  └─ data/             # 运行时生成：向量库 + Embedding 模型缓存（已 gitignore）
 ├─ docs/interview-qa.md # 面试问答（与代码同步维护）
 ├─ .github/workflows    # CI
@@ -191,7 +191,7 @@ cd backend
 ../.venv/Scripts/python -m pytest
 ```
 
-**默认 37 个用例完全自包含**：无需 MySQL、无需联网——用例跑在 SQLite 上，
+**默认 47 个用例完全自包含**：无需 MySQL、无需联网——用例跑在 SQLite 上，
 向量部分使用确定性假 Embedding。CI 里额外跑 `ruff check` 与覆盖率。
 
 另外 4 个用例需要真实 MySQL（并发防超卖 + 幂等支付 + 外键 + InnoDB 校验），
@@ -205,7 +205,7 @@ cd backend && pytest -m mysql -v          # 需要本地 MySQL；会自动建/�
 
 ```bash
 pytest tests/test_security.py -v        # 越权与鉴权
-pytest tests/test_regressions.py -v     # 14 个已修复缺陷的回归
+pytest tests/test_regressions.py -v     # 15 个已修复缺陷的回归
 pytest -m rag_quality -s                # 真实 BGE 模型的召回率（无模型缓存时自动 skip）
 pytest -m mysql -v                      # 真实 MySQL / InnoDB 集成（连不上时自动 skip）
 ```

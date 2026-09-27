@@ -171,3 +171,31 @@ def test_refund_reject_returns_to_original(client, db, user, admin):
     assert res.status_code == 200
     assert res.json()["status"] == "paid"
     assert res.json()["refund_note"] == "不符合政策"
+
+
+def test_page_size_is_bounded(client):
+    """分页上限写死在 Query(le=...)：超过上限要报 422，而不是让客户端
+    用一个巨大的 page_size 把整张表拉走。"""
+    assert client.get("/api/v1/products", params={"page_size": 101}).status_code == 422
+    assert client.get("/api/v1/products", params={"page_size": 0}).status_code == 422
+    assert client.get("/api/v1/products", params={"page": 0}).status_code == 422
+
+
+def test_cart_rejects_sku_belonging_to_another_product(client, db, user):
+    """sku_id 必须属于所加购的商品：否则可以把 A 商品的低价 SKU 挂到
+    B 商品上（下单是按 SKU 价格算钱的）。"""
+    cheap = create_product(db, "便宜商品", skus=[("低价版", {}, 1, 10)])
+    expensive = create_product(db, "昂贵商品", skus=[("高价版", {}, 999, 10)])
+    headers = auth_header(client, "buyer", "user123")
+
+    res = client.post(
+        "/api/v1/cart/items",
+        json={
+            "product_id": expensive.id,
+            "sku_id": cheap.skus[0].id,
+            "quantity": 1,
+        },
+        headers=headers,
+    )
+
+    assert res.status_code == 400, res.text
