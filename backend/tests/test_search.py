@@ -196,3 +196,77 @@ def test_ai_fallback_uses_the_same_search_logic(db):
     assert [product.name for product in hits] == ["华为 Mate 60 Pro"]
     # 同义词同样生效
     assert [p.name for p in product_service.search_products(db, "苹果", limit=5)]
+
+
+# --- 中文名词后缀：鞋子 / 帽子 / 袜子 ---
+
+
+def _seed_shoes(db):
+    _make_product(
+        db,
+        "Nike Air Max 270",
+        "气垫缓震运动鞋，透气网面，黑白经典配色。",
+        _make_category(db, "运动鞋"),
+        skus=[("42 码", 899, 6, {})],
+        sales=120,
+    )
+    _make_product(
+        db,
+        "电子书阅读器",
+        "6 英寸墨水屏，适合长时间阅读。",
+        None,
+        skus=[("黑色 32GB", 1299, 3, {})],
+        sales=40,
+    )
+    _make_product(
+        db,
+        "充电宝 20000mAh",
+        "双向快充，可给手机和平板充电。",
+        None,
+        skus=[("白色", 129, 10, {})],
+        sales=300,
+    )
+
+
+def test_noun_suffix_is_relaxed_when_strict_match_is_empty(client, db):
+    """搜「鞋子」要能找到文案里只写「运动鞋」的商品。
+
+    这是用户实际反馈的问题：中文用户习惯加「子」，商品文案只写核心词。
+    """
+    _seed_shoes(db)
+
+    assert _search(client, "鞋")[0] == ["Nike Air Max 270"]
+    assert _search(client, "运动鞋")[0] == ["Nike Air Max 270"]
+    # 严格匹配没有结果 → 去掉后缀再试一次
+    assert _search(client, "鞋子")[0] == ["Nike Air Max 270"]
+
+
+def test_relaxation_does_not_widen_when_strict_match_exists(client, db):
+    """严格匹配有结果时**不**放宽，否则搜「电子」会带出「充电宝」这类含「电」的商品。"""
+    _seed_shoes(db)
+
+    names, total = _search(client, "电子")
+
+    assert names == ["电子书阅读器"]
+    assert total == 1
+
+
+def test_words_where_suffix_is_part_of_the_word_are_not_stripped(client, db):
+    """「电子」里的「子」是词的一部分，不该被当成后缀截掉。
+
+    没有这个例外表时，搜「电子」因为严格匹配为空 → 放宽成「电」→
+    连充电宝都一起返回。这类词用一个显式词表兜住。
+    """
+    _seed_shoes(db)  # 这里面有「充电宝 20000mAh」和「电子书阅读器」
+
+    # 先确认「电」本身确实能搜到充电宝，证明放宽真的会发生
+    assert "充电宝 20000mAh" in _search(client, "电")[0]
+    # 但「电子」不该退化成「电」
+    assert _search(client, "电子")[0] == ["电子书阅读器"]
+
+
+def test_relaxation_returns_empty_when_nothing_matches(client, db):
+    """放宽也救不回来时返回空，不能因为放宽就乱给结果。"""
+    _seed_shoes(db)
+
+    assert _search(client, "椅子")[0] == []

@@ -19,7 +19,7 @@
   还刻意放了多组近义干扰文档）。同一套评测集、同一条线上代码路径上测出三级提升：
   纯向量 recall@1 84.3% → **BM25 混合检索 90.2%** → **再加交叉编码器重排 92.2%，
   且 recall@3 达到 100%**（进 Prompt 的就是 top-3）；
-- **工程化**：Alembic 幂等迁移（含可用的 downgrade）、75 个 pytest 用例（覆盖率 72%）、
+- **工程化**：Alembic 幂等迁移（含可用的 downgrade）、79 个 pytest 用例（覆盖率 76%）、
   **10 个 Playwright 端到端用例**（真浏览器 + 控制台零报错 + 样式生效断言）、
   GitHub Actions CI、Docker Compose 一键部署（多阶段镜像 + 非 root + HEALTHCHECK）；
   前端 Element Plus 按需引入，`dist` 体积减半（1579KB → 762KB）。
@@ -45,7 +45,7 @@
 | 大模型 | DeepSeek（OpenAI 兼容接口，模型名 `deepseek-flash`） |
 | 认证 | JWT（python-jose + bcrypt） |
 | 部署 | Docker Compose + Nginx（多阶段构建、非 root、HEALTHCHECK、自动迁移 + 种子数据） |
-| 测试 | pytest + httpx（75 个用例：认证/订单全流程/越权/回归/搜索/缓存与限流/RAG 召回与重排/真实 MySQL 并发） |
+| 测试 | pytest + httpx（79 个用例：认证/订单全流程/越权/回归/搜索/缓存与限流/RAG 召回与重排/真实 MySQL 并发） |
 | 质量 | ruff + pytest-cov + ESLint + Prettier + GitHub Actions |
 
 ## 功能概览
@@ -183,7 +183,7 @@ MAX_UPLOAD_SIZE=2097152
 │  ├─ app/ai            # RAG 链路（loader/vectorstore/indexer/rag/eval_dataset）
 │  ├─ app/core          # 配置/安全/数据库/缓存/限流/锁/日志/指标/后台任务
 │  ├─ alembic           # 数据库迁移
-│  ├─ tests             # 75 个 pytest 用例
+│  ├─ tests             # 79 个 pytest 用例
 │  └─ data/             # 运行时生成：向量库 + Embedding 模型缓存（已 gitignore）
 ├─ docs/interview-qa.md # 面试问答（与代码同步维护）
 ├─ docs/resume-project.md # 简历描述三版 + 数字证据索引
@@ -235,7 +235,7 @@ cd backend
 ../.venv/Scripts/python -m pytest
 ```
 
-**默认 64 个用例完全自包含**：不需要 MySQL、Redis、联网——用例跑在 SQLite 上，
+**默认 68 个用例完全自包含**：不需要 MySQL、Redis、联网——用例跑在 SQLite 上，
 向量部分使用确定性假 Embedding、重排用桩模型。CI 里额外跑 `ruff check` 与覆盖率。
 
 另外 **11 个用例需要真实基础设施**，连不上时自动 skip、不会让 CI 变红：
@@ -355,7 +355,7 @@ cd frontend && npm run test:e2e
 
 ```bash
 cd backend && ruff check .                      # 静态检查（F/E9：只拦真 bug）
-cd backend && pytest --cov=app --cov-report=term-missing   # 当前 72%，CI 门槛 70%
+cd backend && pytest --cov=app --cov-report=term-missing   # 当前 76%，CI 门槛 70%
 
 cd frontend && npm run lint && npm run build    # 两个前端都需 lint + 构建通过
 cd admin    && npm run lint && npm run build
