@@ -287,14 +287,17 @@ jobs:
         working-directory: frontend
         run: |
           set -o pipefail
-          npm run test:e2e 2>&1 | tee /tmp/e2e.log
-          status=${PIPESTATUS[0]}
+          # 注意：GitHub 的 run 步骤默认带 bash -e，所以「失败后再做诊断」必须写在
+          # `|| status=$?` 这种 OR 列表里——否则脚本在管道失败那一刻就退出了，
+          # 诊断代码根本不会执行（第一版就是这么白写了的）。
+          status=0
+          npm run test:e2e 2>&1 | tee /tmp/e2e.log || status=$?
           if [ "$status" -ne 0 ]; then
-            # 把失败摘要打成注解：这样在 Actions 页面和 API 里都能直接看到，
-            # 不用翻几百行日志（CI 上没法像本地那样顺手复现）
+            # 把失败的尾巴打成注解：注解在公网可读（日志需要鉴权），
+            # 这样不登录也能直接看出是哪条用例、哪一行断言挂了
             while IFS= read -r line; do
               echo "::error::$line"
-            done < <(grep -E "✘|Error|error:|failed|Timed out|expect\(|locator" /tmp/e2e.log | head -n 20)
+            done < <(tail -n 25 /tmp/e2e.log)
           fi
           exit "$status"
 
