@@ -1,8 +1,10 @@
 import hashlib
+import re
 from typing import Optional, List
 
+import jieba
+from sqlalchemy import case, or_
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
 from sqlalchemy.orm import selectinload
 from fastapi import HTTPException
 
@@ -15,8 +17,116 @@ from app.schemas.product import CategoryOut, ProductOut
 # --- 缓存键 ---
 # 列表缓存按「查询参数哈希」区分，键会越攒越多，所以失效时按前缀整体清掉
 _PRODUCT_DETAIL_PREFIX = "product:detail:"
-_PRODUCT_LIST_PREFIX = "product:list:"
+# 末位的 v2 是给搜索结果用的：检索语义变了（整串匹配 → 分词匹配），
+# 带上版本号可以让旧缓存自然失配，而不是等 60 秒 TTL 过期——
+# 否则「改了逻辑但用户还看到旧结果」会被当成没改好。
+_PRODUCT_LIST_PREFIX = "product:list:v2:"
 _CATEGORY_KEY = "product:categories"
+
+# --- 搜索 ---
+# 同义词是**单向**的：只从中文泛称扩展到对应的英文品牌 / 品类词，反过来不扩展。
+# 这样搜「苹果」能出 iPhone（商品名里只有 iPhone，没有「苹果」二字），
+# 而搜「iPhone」只会出 iPhone——做成双向的话，搜具体型号时会混进同品牌的其他商品
+# （实测：双向扩展时搜 iPhone 会带出 Apple Watch）。
+# 真实系统靠搜索引擎的同义词词典或商品标签体系做这件事，这里只是最小可用版本。
+_SEARCH_ALIASES = {
+    "苹果": ("iphone", "apple"),
+    "笔记本": ("macbook", "thinkpad", "notebook"),
+    "耳机": ("airpods", "headphone"),
+    "平板": ("ipad", "matepad"),
+}
+
+_CJK_ONLY = re.compile(r"^[\u4e00-\u9fff]+$")
+_TERM_SPLIT = re.compile(r"[\s,，、;；/|+]+")
+
+
+def _search_terms(keyword: str) -> List[List[str]]:
+    """把关键词切成「词 → 同义词组」，返回 ``[[词1及其同义词...], [词2...]]``。
+
+    切分：先按空白和常见分隔符切；再把每个纯中文片段用 jieba 切一层
+    （「华为手机」→ 华为 + 手机）。这一步是「模糊搜索」的关键——不做的话
+    「华为手机」会被当成一个整串去匹配，而没有任何商品名里含这四个字，
+    用户看到的就是「搜什么都搜不到」。
+
+    词与词之间是 AND，词内同义词之间是 OR。
+    """
+    terms: List[str] = []
+    for chunk in _TERM_SPLIT.split(keyword.strip()):
+        if not chunk:
+            continue
+        tokens: List[str] = []
+        if _CJK_ONLY.match(chunk) and len(chunk) > 2:
+            tokens = [
+                token
+                for token in jieba.lcut(chunk)
+                if len(token) >= 2 and _CJK_ONLY.match(token)
+            ]
+        # 切出多个词就用词（「华为手机」→ 华为 + 手机）；
+        # 只切出一个词、或本来就是单个词时，用原串，别把它拆碎。
+        # 注意不能「原串 + 分词」都放进条件里：那样会变成 AND，
+        # 等于要求商品名里含「华为手机」这四个字，反而搜不到。
+        terms.extend(tokens if len(tokens) > 1 else [chunk])
+
+    groups: List[List[str]] = []
+    seen = set()
+    for term in terms:
+        key = term.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        groups.append([term, *_SEARCH_ALIASES.get(key, ())])
+    return groups
+
+
+def _sku_name_matches(db: Session, term: str):
+    """该商品的任一 SKU 名称包含 term。
+
+    用 EXISTS 子查询而不是 join SKU 表：join 会让一个商品按 SKU 数量出现多行，
+    分页和 total 都会算错。搜 SKU 名称同时覆盖了颜色/容量这类规格——
+    种子数据里规格值（「雅丹黑」「512GB」）本来就写在 SKU 名称里。
+    """
+    pattern = f"%{term}%"
+    return (
+        db.query(ProductSku.id)
+        .filter(ProductSku.product_id == Product.id, ProductSku.name.ilike(pattern))
+        .exists()
+    )
+
+
+def _apply_keyword_filter(query, db: Session, keyword: str):
+    """给查询加上关键词过滤，返回 ``(query, 名称命中得分表达式)``。
+
+    列表搜索与 AI 客服的商品兜底共用这一份实现——同一件事写两遍迟早会漂移。
+    """
+    term_groups = _search_terms(keyword)
+    if not term_groups:
+        return query, None
+
+    query = query.outerjoin(Category, Product.category_id == Category.id)
+    for synonyms in term_groups:
+        # 同一个词的同义词之间取 OR，不同词之间取 AND
+        query = query.filter(
+            or_(
+                *[
+                    or_(
+                        Product.name.ilike(f"%{term}%"),
+                        Product.description.ilike(f"%{term}%"),
+                        Category.name.ilike(f"%{term}%"),
+                        _sku_name_matches(db, term),
+                    )
+                    for term in synonyms
+                ]
+            )
+        )
+
+    # 名称命中的排前面：搜「手机」时，名字里就带手机的商品应该比只在描述里
+    # 提了一句的靠前。用 SUM(CASE ...) 数命中词数当相关度。
+    name_hit_score = sum(
+        case((Product.name.ilike(f"%{term}%"), 1), else_=0)
+        for synonyms in term_groups
+        for term in synonyms
+    )
+    return query, name_hit_score
 
 
 def invalidate_product_cache(product_id: Optional[int] = None) -> None:
@@ -124,14 +234,9 @@ def get_products(
         .filter(Product.status == ProductStatus.ON)
     )
 
+    name_hit_score = None
     if keyword:
-        query = query.outerjoin(Category, Product.category_id == Category.id).filter(
-            or_(
-                Product.name.ilike(f"%{keyword}%"),
-                Product.description.ilike(f"%{keyword}%"),
-                Category.name.ilike(f"%{keyword}%"),
-            )
-        )
+        query, name_hit_score = _apply_keyword_filter(query, db, keyword)
 
     if category_id:
         sub_ids = [category_id]
@@ -146,10 +251,13 @@ def get_products(
         sort_by = "created_at"
     sort_column = getattr(Product, sort_by, Product.created_at)
 
-    if sort_order == "asc":
-        query = query.order_by(sort_column.asc())
-    else:
-        query = query.order_by(sort_column.desc())
+    order_by = []
+    # 只有在「搜索 + 用户没显式指定排序」时才按相关度优先：
+    # 用户明确点了按价格排序时，就该尊重他的选择。
+    if name_hit_score is not None and sort_by == "created_at":
+        order_by.append(name_hit_score.desc())
+    order_by.append(sort_column.asc() if sort_order == "asc" else sort_column.desc())
+    query = query.order_by(*order_by)
 
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
@@ -204,19 +312,22 @@ def get_categories(db: Session):
 
 
 def search_products(db: Session, keyword: str, limit: int = 5):
-    """供 AI 客服使用的轻量商品检索（仅上架）。"""
+    """供 AI 客服使用的轻量商品检索（仅上架）。
+
+    与列表搜索共用同一套分词逻辑：用户对 AI 说的是自然语言，
+    整串匹配几乎必然落空，分词之后至少能命中其中的商品词。
+    """
     query = (
         db.query(Product)
         .options(selectinload(Product.skus), selectinload(Product.category))
         .filter(Product.status == ProductStatus.ON)
     )
-    query = query.filter(
-        or_(
-            Product.name.ilike(f"%{keyword}%"),
-            Product.description.ilike(f"%{keyword}%"),
-        )
-    )
-    return query.order_by(Product.sales.desc()).limit(limit).all()
+    query, name_hit_score = _apply_keyword_filter(query, db, keyword)
+    order_by = []
+    if name_hit_score is not None:
+        order_by.append(name_hit_score.desc())
+    order_by.append(Product.sales.desc())
+    return query.order_by(*order_by).limit(limit).all()
 
 
 # --- Admin methods ---

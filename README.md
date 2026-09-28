@@ -19,8 +19,8 @@
   还刻意放了多组近义干扰文档）。同一套评测集、同一条线上代码路径上测出三级提升：
   纯向量 recall@1 84.3% → **BM25 混合检索 90.2%** → **再加交叉编码器重排 92.2%，
   且 recall@3 达到 100%**（进 Prompt 的就是 top-3）；
-- **工程化**：Alembic 幂等迁移（含可用的 downgrade）、64 个 pytest 用例（覆盖率 71%）、
-  **9 个 Playwright 端到端用例**（真浏览器 + 控制台零报错 + 样式生效断言）、
+- **工程化**：Alembic 幂等迁移（含可用的 downgrade）、74 个 pytest 用例（覆盖率 72%）、
+  **10 个 Playwright 端到端用例**（真浏览器 + 控制台零报错 + 样式生效断言）、
   GitHub Actions CI、Docker Compose 一键部署（多阶段镜像 + 非 root + HEALTHCHECK）；
   前端 Element Plus 按需引入，`dist` 体积减半（1579KB → 762KB）。
 - **抗读压力与防滥用**：商品读路径走 Redis 缓存（50 并发实测 **P99 51ms → 23ms**，
@@ -45,7 +45,7 @@
 | 大模型 | DeepSeek（OpenAI 兼容接口，模型名 `deepseek-flash`） |
 | 认证 | JWT（python-jose + bcrypt） |
 | 部署 | Docker Compose + Nginx（多阶段构建、非 root、HEALTHCHECK、自动迁移 + 种子数据） |
-| 测试 | pytest + httpx（64 个用例：认证/订单全流程/越权/回归/RAG 召回与重排/缓存与限流/真实 MySQL 并发） |
+| 测试 | pytest + httpx（74 个用例：认证/订单全流程/越权/回归/搜索/缓存与限流/RAG 召回与重排/真实 MySQL 并发） |
 | 质量 | ruff + pytest-cov + ESLint + Prettier + GitHub Actions |
 
 ## 功能概览
@@ -183,7 +183,7 @@ MAX_UPLOAD_SIZE=2097152
 │  ├─ app/ai            # RAG 链路（loader/vectorstore/indexer/rag/eval_dataset）
 │  ├─ app/core          # 配置/安全/数据库/缓存/限流/锁/日志/指标/后台任务
 │  ├─ alembic           # 数据库迁移
-│  ├─ tests             # 64 个 pytest 用例
+│  ├─ tests             # 74 个 pytest 用例
 │  └─ data/             # 运行时生成：向量库 + Embedding 模型缓存（已 gitignore）
 ├─ docs/interview-qa.md # 面试问答（与代码同步维护）
 ├─ docs/resume-project.md # 简历描述三版 + 数字证据索引
@@ -202,7 +202,7 @@ MAX_UPLOAD_SIZE=2097152
 
 - 重排只在 CPU 上跑（每条问题约 0.6 秒）。上生产要么换 GPU，要么换更小的
   cross-encoder；也没有做重排结果的缓存，同一个问题反复问会重复计算；
-- 前端无 TypeScript、无单元测试（有 9 个 Playwright 端到端冒烟测试，但没进 CI——
+- 前端无 TypeScript、无单元测试（有 10 个 Playwright 端到端冒烟测试，但没进 CI——
   需要同时起后端、MySQL、Redis 与两个前端，成本高，目前是本地手动跑）；
   商城前台的全局路由守卫已是唯一权威判断，
   但各页面里还留着早期手写的 `onMounted` 登录判断（现在属于冗余代码，可删）；
@@ -235,7 +235,7 @@ cd backend
 ../.venv/Scripts/python -m pytest
 ```
 
-**默认 53 个用例完全自包含**：不需要 MySQL、Redis、联网——用例跑在 SQLite 上，
+**默认 63 个用例完全自包含**：不需要 MySQL、Redis、联网——用例跑在 SQLite 上，
 向量部分使用确定性假 Embedding、重排用桩模型。CI 里额外跑 `ruff check` 与覆盖率。
 
 另外 **11 个用例需要真实基础设施**，连不上时自动 skip、不会让 CI 变红：
@@ -254,7 +254,7 @@ pytest -m rag_quality -s                # 真实 BGE 模型的召回率（无模
 pytest -m mysql -v                      # 真实 MySQL / InnoDB 集成（连不上时自动 skip）
 ```
 
-### 端到端冒烟测试（Playwright，9 个用例）
+### 端到端冒烟测试（Playwright，10 个用例）
 
 真浏览器跑真页面：首页渲染、商品详情、搜索、登录、购物车、AI 客服面板、后台登录与看板，
 并断言**控制台没有任何报错**。这个检查很值钱——组件没注册、`v-loading` 指令没注册、
@@ -355,7 +355,7 @@ cd frontend && npm run test:e2e
 
 ```bash
 cd backend && ruff check .                      # 静态检查（F/E9：只拦真 bug）
-cd backend && pytest --cov=app --cov-report=term-missing   # 当前 71%，CI 门槛 70%
+cd backend && pytest --cov=app --cov-report=term-missing   # 当前 72%，CI 门槛 70%
 
 cd frontend && npm run lint && npm run build    # 两个前端都需 lint + 构建通过
 cd admin    && npm run lint && npm run build
@@ -377,6 +377,10 @@ ESLint / Prettier 配置与依赖都已就位（`eslint.config.mjs` / `.prettier
 ## 核心设计说明
 
 - **SKU 化交易**：购物车/订单按 SKU 计价扣库存，商品表 `price/stock` 为聚合展示值。
+- **搜索**：关键词先分词再匹配（jieba 切中文，词间 AND / 同义词间 OR），覆盖商品名、
+  描述、分类名与 SKU 名称，默认按名称命中数排序；一张单向同义词表解决「搜苹果搜不到
+  iPhone」这类中英错配。见 `product_service._search_terms`。
+  代价：`%keyword%` 用不到索引，数据量大要换全文索引（MySQL ngram FULLTEXT / ES）。
 - **防超卖**：扣减用 `UPDATE ... WHERE stock >= ?` 原子条件更新，以 `rowcount` 判断成败，
   无需额外加锁；SKU 与商品聚合库存同一事务内扣减。
 - **订单状态机**：`pending_pay → paid → shipped → completed`；待支付可取消；
