@@ -186,6 +186,7 @@ MAX_UPLOAD_SIZE=2097152
 │  ├─ tests             # 64 个 pytest 用例
 │  └─ data/             # 运行时生成：向量库 + Embedding 模型缓存（已 gitignore）
 ├─ docs/interview-qa.md # 面试问答（与代码同步维护）
+├─ docs/resume-project.md # 简历描述三版 + 数字证据索引
 ├─ .github/workflows    # CI
 ├─ web/                 # Nginx + 前端产物 Dockerfile
 └─ docker-compose.yml
