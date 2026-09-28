@@ -19,7 +19,7 @@
   还刻意放了多组近义干扰文档）。同一套评测集、同一条线上代码路径上测出三级提升：
   纯向量 recall@1 84.3% → **BM25 混合检索 90.2%** → **再加交叉编码器重排 92.2%，
   且 recall@3 达到 100%**（进 Prompt 的就是 top-3）；
-- **工程化**：Alembic 幂等迁移（含可用的 downgrade）、79 个 pytest 用例（覆盖率 76%）、
+- **工程化**：Alembic 幂等迁移（含可用的 downgrade）、87 个 pytest 用例（覆盖率 76%）、
   **10 个 Playwright 端到端用例**（真浏览器 + 控制台零报错 + 样式生效断言）、
   GitHub Actions CI、Docker Compose 一键部署（多阶段镜像 + 非 root + HEALTHCHECK）；
   前端 Element Plus 按需引入，`dist` 体积减半（1579KB → 762KB）。
@@ -45,7 +45,7 @@
 | 大模型 | DeepSeek（OpenAI 兼容接口，模型名 `deepseek-flash`） |
 | 认证 | JWT（python-jose + bcrypt） |
 | 部署 | Docker Compose + Nginx（多阶段构建、非 root、HEALTHCHECK、自动迁移 + 种子数据） |
-| 测试 | pytest + httpx（79 个用例：认证/订单全流程/越权/回归/搜索/缓存与限流/RAG 召回与重排/真实 MySQL 并发） |
+| 测试 | pytest + httpx（87 个用例：认证/订单全流程/越权/回归/搜索/缓存与限流/RAG 召回与重排/真实 MySQL 并发） |
 | 质量 | ruff + pytest-cov + ESLint + Prettier + GitHub Actions |
 
 ## 功能概览
@@ -183,7 +183,7 @@ MAX_UPLOAD_SIZE=2097152
 │  ├─ app/ai            # RAG 链路（loader/vectorstore/indexer/rag/eval_dataset）
 │  ├─ app/core          # 配置/安全/数据库/缓存/限流/锁/日志/指标/后台任务
 │  ├─ alembic           # 数据库迁移
-│  ├─ tests             # 79 个 pytest 用例
+│  ├─ tests             # 87 个 pytest 用例
 │  └─ data/             # 运行时生成：向量库 + Embedding 模型缓存（已 gitignore）
 ├─ docs/interview-qa.md # 面试问答（与代码同步维护）
 ├─ docs/resume-project.md # 简历描述三版 + 数字证据索引
@@ -235,7 +235,7 @@ cd backend
 ../.venv/Scripts/python -m pytest
 ```
 
-**默认 68 个用例完全自包含**：不需要 MySQL、Redis、联网——用例跑在 SQLite 上，
+**默认 76 个用例完全自包含**：不需要 MySQL、Redis、联网——用例跑在 SQLite 上，
 向量部分使用确定性假 Embedding、重排用桩模型。CI 里额外跑 `ruff check` 与覆盖率。
 
 另外 **11 个用例需要真实基础设施**，连不上时自动 skip、不会让 CI 变红：
@@ -377,10 +377,14 @@ ESLint / Prettier 配置与依赖都已就位（`eslint.config.mjs` / `.prettier
 ## 核心设计说明
 
 - **SKU 化交易**：购物车/订单按 SKU 计价扣库存，商品表 `price/stock` 为聚合展示值。
-- **搜索**：关键词先分词再匹配（jieba 切中文，词间 AND / 同义词间 OR），覆盖商品名、
-  描述、分类名与 SKU 名称，默认按名称命中数排序；一张单向同义词表解决「搜苹果搜不到
-  iPhone」这类中英错配。见 `product_service._search_terms`。
-  代价：`%keyword%` 用不到索引，数据量大要换全文索引（MySQL ngram FULLTEXT / ES）。
+- **搜索**：查询理解单独成层（`app/services/search.py`），把「用户敲的字」和「文案写的字」
+  对齐。三类差异各有对策——**形式差异**（空格、连字符、大小写、全角、容量单位写法
+  `512G`/`512GB`）由统一归一化管道消除，查询侧和文案侧走同一个 `normalize()`；
+  **分词差异**用 jieba 把中文长词切开（「华为手机」→ 华为 + 手机）；**用词差异**
+  （「鞋子」vs「运动鞋」、「苹果」vs iPhone）没有算法能推，只能靠数据，单独放在
+  `search_synonyms.py` 里维护。词间 AND，只有 AND 一条都没有时才退化为 OR，
+  避免「一个词不认识就整页空白」。覆盖商品名、描述、分类名与 SKU 名称，默认按名称命中数排序。
+  代价：`%keyword%` 用不到索引，数据量大要换成物化搜索列或搜索引擎。
 - **防超卖**：扣减用 `UPDATE ... WHERE stock >= ?` 原子条件更新，以 `rowcount` 判断成败，
   无需额外加锁；SKU 与商品聚合库存同一事务内扣减。
 - **订单状态机**：`pending_pay → paid → shipped → completed`；待支付可取消；

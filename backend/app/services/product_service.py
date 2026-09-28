@@ -1,9 +1,6 @@
 import hashlib
-import re
 from typing import Optional, List
 
-import jieba
-from sqlalchemy import case, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import selectinload
 from fastapi import HTTPException
@@ -13,6 +10,7 @@ from app.core.config import settings
 from app.models.product import Product, Category, ProductStatus
 from app.models.sku import ProductSku
 from app.schemas.product import CategoryOut, ProductOut
+from app.services import search
 
 # --- 缓存键 ---
 # 列表缓存按「查询参数哈希」区分，键会越攒越多，所以失效时按前缀整体清掉
@@ -22,151 +20,6 @@ _PRODUCT_DETAIL_PREFIX = "product:detail:"
 # 否则「改了逻辑但用户还看到旧结果」会被当成没改好。
 _PRODUCT_LIST_PREFIX = "product:list:v2:"
 _CATEGORY_KEY = "product:categories"
-
-# --- 搜索 ---
-# 同义词是**单向**的：只从中文泛称扩展到对应的英文品牌 / 品类词，反过来不扩展。
-# 这样搜「苹果」能出 iPhone（商品名里只有 iPhone，没有「苹果」二字），
-# 而搜「iPhone」只会出 iPhone——做成双向的话，搜具体型号时会混进同品牌的其他商品
-# （实测：双向扩展时搜 iPhone 会带出 Apple Watch）。
-# 真实系统靠搜索引擎的同义词词典或商品标签体系做这件事，这里只是最小可用版本。
-_SEARCH_ALIASES = {
-    "苹果": ("iphone", "apple"),
-    "笔记本": ("macbook", "thinkpad", "notebook"),
-    "耳机": ("airpods", "headphone"),
-    "平板": ("ipad", "matepad"),
-}
-
-_CJK_ONLY = re.compile(r"^[\u4e00-\u9fff]+$")
-_TERM_SPLIT = re.compile(r"[\s,，、;；/|+]+")
-
-# 中文名词常带「子/儿」后缀（鞋子、帽子、袜子），而商品文案里往往只写核心词
-# （运动鞋、鸭舌帽）。只在**严格匹配没有任何结果**时才截断后缀，理由是精度：
-# 始终截断的话，搜「电子」会顺带匹配所有含「电」的商品（电池、电视……）。
-# 刻意不剥「头」——「镜头」剥成「镜」会匹配到眼镜、镜子，过宽。
-_CJK_NOUN_SUFFIXES = ("子", "儿")
-
-# 「子」不是后缀、而是词本身的一部分的词——这类不能截断，否则精度掉得厉害。
-# 实测：没有这个例外表时，搜「电子」因为严格匹配为空而放宽成「电」，
-# 结果一次性带回充电宝、鼠标、耳机、吸尘器共 7 条。
-# 真实系统的做法是用分词平台 + 同义词库维护这类规则，这里用一份小词表兜住。
-_NO_SUFFIX_STRIP = frozenset(
-    {
-        "电子", "原子", "量子", "分子", "离子", "光子", "粒子",
-        "男子", "女子", "妻子", "孩子", "王子", "太子", "君子", "弟子", "汉子", "骗子",
-    }
-)
-
-
-def _relaxed_keyword(keyword: str) -> Optional[str]:
-    """把所有以「子/儿」结尾的中文片段去掉后缀，返回放宽后的关键词。
-
-    没有任何片段可截断时返回 None，调用方据此跳过额外的 count 查询。
-    """
-    parts: List[str] = []
-    changed = False
-    for chunk in _TERM_SPLIT.split(keyword.strip()):
-        if not chunk:
-            continue
-        if (
-            len(chunk) > 1
-            and _CJK_ONLY.match(chunk)
-            and chunk not in _NO_SUFFIX_STRIP
-            and chunk.endswith(_CJK_NOUN_SUFFIXES)
-        ):
-            parts.append(chunk[:-1])
-            changed = True
-        else:
-            parts.append(chunk)
-    return " ".join(parts) if changed else None
-
-
-def _search_terms(keyword: str) -> List[List[str]]:
-    """把关键词切成「词 → 同义词组」，返回 ``[[词1及其同义词...], [词2...]]``。
-
-    切分：先按空白和常见分隔符切；再把每个纯中文片段用 jieba 切一层
-    （「华为手机」→ 华为 + 手机）。这一步是「模糊搜索」的关键——不做的话
-    「华为手机」会被当成一个整串去匹配，而没有任何商品名里含这四个字，
-    用户看到的就是「搜什么都搜不到」。
-
-    词与词之间是 AND，词内同义词之间是 OR。
-    """
-    terms: List[str] = []
-    for chunk in _TERM_SPLIT.split(keyword.strip()):
-        if not chunk:
-            continue
-        tokens: List[str] = []
-        if _CJK_ONLY.match(chunk) and len(chunk) > 2:
-            tokens = [
-                token
-                for token in jieba.lcut(chunk)
-                if len(token) >= 2 and _CJK_ONLY.match(token)
-            ]
-        # 切出多个词就用词（「华为手机」→ 华为 + 手机）；
-        # 只切出一个词、或本来就是单个词时，用原串，别把它拆碎。
-        # 注意不能「原串 + 分词」都放进条件里：那样会变成 AND，
-        # 等于要求商品名里含「华为手机」这四个字，反而搜不到。
-        terms.extend(tokens if len(tokens) > 1 else [chunk])
-
-    groups: List[List[str]] = []
-    seen = set()
-    for term in terms:
-        key = term.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        groups.append([term, *_SEARCH_ALIASES.get(key, ())])
-    return groups
-
-
-def _sku_name_matches(db: Session, term: str):
-    """该商品的任一 SKU 名称包含 term。
-
-    用 EXISTS 子查询而不是 join SKU 表：join 会让一个商品按 SKU 数量出现多行，
-    分页和 total 都会算错。搜 SKU 名称同时覆盖了颜色/容量这类规格——
-    种子数据里规格值（「雅丹黑」「512GB」）本来就写在 SKU 名称里。
-    """
-    pattern = f"%{term}%"
-    return (
-        db.query(ProductSku.id)
-        .filter(ProductSku.product_id == Product.id, ProductSku.name.ilike(pattern))
-        .exists()
-    )
-
-
-def _apply_keyword_filter(query, db: Session, keyword: str):
-    """给查询加上关键词过滤，返回 ``(query, 名称命中得分表达式)``。
-
-    列表搜索与 AI 客服的商品兜底共用这一份实现——同一件事写两遍迟早会漂移。
-    """
-    term_groups = _search_terms(keyword)
-    if not term_groups:
-        return query, None
-
-    query = query.outerjoin(Category, Product.category_id == Category.id)
-    for synonyms in term_groups:
-        # 同一个词的同义词之间取 OR，不同词之间取 AND
-        query = query.filter(
-            or_(
-                *[
-                    or_(
-                        Product.name.ilike(f"%{term}%"),
-                        Product.description.ilike(f"%{term}%"),
-                        Category.name.ilike(f"%{term}%"),
-                        _sku_name_matches(db, term),
-                    )
-                    for term in synonyms
-                ]
-            )
-        )
-
-    # 名称命中的排前面：搜「手机」时，名字里就带手机的商品应该比只在描述里
-    # 提了一句的靠前。用 SUM(CASE ...) 数命中词数当相关度。
-    name_hit_score = sum(
-        case((Product.name.ilike(f"%{term}%"), 1), else_=0)
-        for synonyms in term_groups
-        for term in synonyms
-    )
-    return query, name_hit_score
 
 
 def _on_sale_products(db: Session):
@@ -277,21 +130,11 @@ def get_products(
     if cached is not None:
         return cached
 
-    query = _on_sale_products(db)
-
-    name_hit_score = None
-    if keyword:
-        query, name_hit_score = _apply_keyword_filter(query, db, keyword)
-        # 严格匹配一条都没有时，才用「去掉名词后缀」的关键词再试一次：
-        # 用户搜「鞋子」，文案里写的是「运动鞋」，差的就是那个「子」。
-        # 只在关键词真的以「子/儿」结尾时才多花一次 count——绝大多数搜索不受影响。
-        relaxed = _relaxed_keyword(keyword)
-        if relaxed and query.count() == 0:
-            relaxed_query, relaxed_score = _apply_keyword_filter(
-                _on_sale_products(db), db, relaxed
-            )
-            if relaxed_query.count():
-                query, name_hit_score = relaxed_query, relaxed_score
+    # 查询理解（归一化 / 分词 / 同义词 / AND→OR 兜底）全在 search 层，
+    # 这里只管分页、排序与缓存
+    query, name_hit_score = search.apply_product_search(
+        db, _on_sale_products(db), keyword
+    )
 
     if category_id:
         sub_ids = [category_id]
@@ -372,12 +215,9 @@ def search_products(db: Session, keyword: str, limit: int = 5):
     与列表搜索共用同一套分词逻辑：用户对 AI 说的是自然语言，
     整串匹配几乎必然落空，分词之后至少能命中其中的商品词。
     """
-    query = (
-        db.query(Product)
-        .options(selectinload(Product.skus), selectinload(Product.category))
-        .filter(Product.status == ProductStatus.ON)
+    query, name_hit_score = search.apply_product_search(
+        db, _on_sale_products(db), keyword
     )
-    query, name_hit_score = _apply_keyword_filter(query, db, keyword)
     order_by = []
     if name_hit_score is not None:
         order_by.append(name_hit_score.desc())

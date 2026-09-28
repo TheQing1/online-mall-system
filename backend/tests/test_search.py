@@ -5,6 +5,8 @@
 按颜色/容量（「雅丹黑」）也搜不到——用户看到的现象就是「搜索不好用」。
 """
 
+import pytest
+
 from app.models.product import Category, Product, ProductStatus
 from app.models.sku import ProductSku
 
@@ -87,6 +89,14 @@ def _seed_catalog(db):
         skus=[("午夜色 45mm", 3199, 4, {})],
         sales=60,
     )
+    _make_product(
+        db,
+        "索尼 WH-1000XM5",
+        "头戴式无线降噪耳机，续航 30 小时。",
+        _make_category(db, "耳机"),
+        skus=[("黑色", 2299, 5, {})],
+        sales=77,
+    )
 
 
 def test_multi_word_query_matches_all_terms(client, db):
@@ -105,13 +115,36 @@ def test_word_order_does_not_matter(client, db):
     assert _search(client, "华为手机")[0] == _search(client, "手机 华为")[0]
 
 
-def test_all_terms_must_match(client, db):
-    """多词之间是 AND：只满足一个词的商品不该被搜出来。"""
+def test_all_terms_must_match_when_possible(client, db):
+    """有商品同时满足所有词时，只返回它——AND 优先于任何放宽。"""
+    _seed_catalog(db)
+
+    names, total = _search(client, "华为 手机")
+
+    assert names == ["华为 Mate 60 Pro"]
+    assert total == 1
+
+
+def test_falls_back_to_partial_matches_when_nothing_matches_all(client, db):
+    """所有词都满足不了时退化为部分匹配，而不是给一个空页面。
+
+    多词查询里只要有一个词不认识（或者用户把两个不共存的词拼在一起），
+    AND 就会一条不剩。此时给出「命中其中一部分词」的结果，比空页面有用；
+    但只有在 AND 为空时才会发生——有完整匹配时绝不会混进部分匹配。
+    """
     _seed_catalog(db)
 
     names, _total = _search(client, "华为 笔记本")
 
-    assert names == []
+    # 华为的手机 + 笔记本类的商品，各自命中一个词
+    assert set(names) == {"华为 Mate 60 Pro", "MacBook Pro 14 英寸"}
+
+
+def test_single_unknown_term_returns_nothing(client, db):
+    """单个词完全不认识时不会乱给结果（OR 兜底只在多词且 AND 为空时生效）。"""
+    _seed_catalog(db)
+
+    assert _search(client, "阿巴阿巴")[0] == []
 
 
 def test_chinese_alias_matches_english_product_name(client, db):
@@ -270,3 +303,42 @@ def test_relaxation_returns_empty_when_nothing_matches(client, db):
     _seed_shoes(db)
 
     assert _search(client, "椅子")[0] == []
+
+
+# --- 形式差异：大小写、空格、连字符、容量单位、全角 ---
+#
+# 这一类原来是零散补的：先按空格切、再按大小写、再想容量……现在统一走
+# search.normalize()，查询侧与文案侧同一套变换，差异从构造上就消失了。
+
+
+@pytest.mark.parametrize(
+    "keyword",
+    [
+        "mate60",          # 省掉空格
+        "Mate 60",         # 正常写法
+        "Ｍａｔｅ６０",      # 全角
+        "  mate   60  ",   # 多余空白
+    ],
+)
+def test_form_variants_all_find_the_same_product(client, db, keyword):
+    _seed_catalog(db)
+
+    assert _search(client, keyword)[0] == ["华为 Mate 60 Pro"]
+
+
+def test_hyphen_and_case_are_ignored(client, db):
+    _seed_catalog(db)
+
+    assert _search(client, "wh1000xm5")[0] == ["索尼 WH-1000XM5"]
+    assert _search(client, "WH-1000XM5")[0] == ["索尼 WH-1000XM5"]
+    assert _search(client, "Wh-1000Xm5")[0] == ["索尼 WH-1000XM5"]
+
+
+def test_storage_unit_variants(client, db):
+    """512G / 512GB、1T / 1TB 是同一件事的两种写法。"""
+    _seed_catalog(db)
+
+    assert _search(client, "512G")[0] == ["华为 Mate 60 Pro"]
+    assert _search(client, "512gb")[0] == ["华为 Mate 60 Pro"]
+    assert _search(client, "1T")[0] == ["MacBook Pro 14 英寸"]
+    assert _search(client, "1tb")[0] == ["MacBook Pro 14 英寸"]
