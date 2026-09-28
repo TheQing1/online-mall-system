@@ -19,7 +19,7 @@
   还刻意放了多组近义干扰文档）。同一套评测集、同一条线上代码路径上测出三级提升：
   纯向量 recall@1 84.3% → **BM25 混合检索 90.2%** → **再加交叉编码器重排 92.2%，
   且 recall@3 达到 100%**（进 Prompt 的就是 top-3）；
-- **工程化**：Alembic 幂等迁移（含可用的 downgrade）、57 个 pytest 用例（覆盖率 72%）、
+- **工程化**：Alembic 幂等迁移（含可用的 downgrade）、57 个 pytest 用例（覆盖率 73%）、
   GitHub Actions CI、Docker Compose 一键部署（多阶段镜像 + 非 root + HEALTHCHECK）。
 
 ## 技术栈
@@ -273,7 +273,7 @@ pytest -m mysql -v                      # 真实 MySQL / InnoDB 集成（连不�
 
 ```bash
 cd backend && ruff check .                      # 静态检查（F/E9：只拦真 bug）
-cd backend && pytest --cov=app --cov-report=term-missing   # 当前 72%，CI 门槛 70%
+cd backend && pytest --cov=app --cov-report=term-missing   # 当前 73%，CI 门槛 70%
 
 cd frontend && npm run lint && npm run build    # 两个前端都需 lint + 构建通过
 cd admin    && npm run lint && npm run build
