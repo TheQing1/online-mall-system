@@ -5,6 +5,12 @@ import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 import path from 'path'
 
+// 同商城前台：dev 与 preview 共用代理，端到端测试跑在 preview 上
+const proxy = {
+  '/api': { target: 'http://localhost:8000', changeOrigin: true },
+  '/static': { target: 'http://localhost:8000', changeOrigin: true }
+}
+
 export default defineConfig({
   plugins: [
     vue(),
@@ -18,9 +24,10 @@ export default defineConfig({
   },
   server: {
     port: 5174,
-    proxy: {
-      '/api': { target: 'http://localhost:8000', changeOrigin: true },
-      '/static': { target: 'http://localhost:8000', changeOrigin: true }
-    }
+    proxy
+  },
+  preview: {
+    port: 5174,
+    proxy
   }
 })

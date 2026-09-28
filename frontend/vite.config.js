@@ -5,6 +5,13 @@ import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 import path from 'path'
 
+// dev 与 preview 共用同一份代理配置：端到端测试跑在 preview（生产产物）上，
+// 如果只给 dev 配代理，测试就会因为拿不到 /api 而全挂。
+const proxy = {
+  '/api': { target: 'http://localhost:8000', changeOrigin: true },
+  '/static': { target: 'http://localhost:8000', changeOrigin: true }
+}
+
 export default defineConfig({
   plugins: [
     vue(),
@@ -24,9 +31,13 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    proxy: {
-      '/api': { target: 'http://localhost:8000', changeOrigin: true },
-      '/static': { target: 'http://localhost:8000', changeOrigin: true }
-    }
+    proxy
+  },
+  // 端到端测试跑的是生产构建产物（`npm run build && npm run preview`）：
+  // 一来避开 dev server 依赖预构建在首次请求时报的 504 Outdated Optimize Dep
+  // （CI 上必现、本地因为缓存预热过所以看不到），二来验的正是要发布的那份代码。
+  preview: {
+    port: 5173,
+    proxy
   }
 })

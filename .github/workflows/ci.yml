@@ -265,10 +265,15 @@ jobs:
         working-directory: frontend
         run: npx playwright install --with-deps chromium
 
-      - name: 启动商城与后台
+      # 跑生产产物而不是 dev server：dev 的依赖预构建在首次请求时可能返回
+      # 504 Outdated Optimize Dep（CI 上必现，本地因为缓存预热过看不到），
+      # 那会被「控制台零报错」的断言当成失败；而且真正要发布的就是这份构建产物。
+      - name: 构建并启动商城与后台（preview）
         run: |
-          nohup npm run dev --prefix frontend > /tmp/frontend.log 2>&1 &
-          nohup npm run dev --prefix admin > /tmp/admin.log 2>&1 &
+          npm run build --prefix frontend
+          npm run build --prefix admin
+          nohup npm run preview --prefix frontend > /tmp/frontend.log 2>&1 &
+          nohup npm run preview --prefix admin > /tmp/admin.log 2>&1 &
           ready=0
           for _ in $(seq 1 30); do
             if curl -sf http://localhost:5173/ > /dev/null \
