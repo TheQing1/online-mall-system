@@ -269,15 +269,34 @@ jobs:
         run: |
           nohup npm run dev --prefix frontend > /tmp/frontend.log 2>&1 &
           nohup npm run dev --prefix admin > /tmp/admin.log 2>&1 &
+          ready=0
           for _ in $(seq 1 30); do
             if curl -sf http://localhost:5173/ > /dev/null \
-              && curl -sf http://localhost:5174/admin/ > /dev/null; then break; fi
+              && curl -sf http://localhost:5174/admin/ > /dev/null; then ready=1; break; fi
             sleep 2
           done
+          # 起不来就当场失败：否则会拖到 E2E 步骤才报「连不上」，看不出是谁的问题
+          if [ "$ready" != "1" ]; then
+            echo "::error::前端没起来（前端日志见下）"
+            tail -n 40 /tmp/frontend.log || true
+            tail -n 40 /tmp/admin.log || true
+            exit 1
+          fi
 
       - name: 端到端测试
         working-directory: frontend
-        run: npm run test:e2e
+        run: |
+          set -o pipefail
+          npm run test:e2e 2>&1 | tee /tmp/e2e.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            # 把失败摘要打成注解：这样在 Actions 页面和 API 里都能直接看到，
+            # 不用翻几百行日志（CI 上没法像本地那样顺手复现）
+            while IFS= read -r line; do
+              echo "::error::$line"
+            done < <(grep -E "✘|Error|error:|failed|Timed out|expect\(|locator" /tmp/e2e.log | head -n 20)
+          fi
+          exit "$status"
 
       # 失败时把三份日志打出来，否则只能看到 Playwright 的断言
       - name: 失败时输出服务日志
