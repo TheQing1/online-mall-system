@@ -535,4 +535,88 @@ def upgrade():
 
 
 def downgrade():
-    pass
+    """回滚 V2 引入的结构。
+
+    **只回滚 V2 新增的部分，保留基础表**（users / categories / products /
+    orders / order_items / cart_items / knowledge_docs / addresses）：
+    它们在 V1 就存在，而 upgrade 里是「缺了才建」，所以无法区分某张表到底是
+    V1 带来的还是这次迁移建的。宁可少删——多留一张空表不会造成故障，
+    删错一张表就是事故。
+
+    顺序上**先删列、再删表**：``order_items.sku_id`` 与 ``cart_items.sku_id``
+    都有指向 ``product_skus`` 的外键，不先删列就删不掉表。
+
+    数据不可恢复：SKU、收藏、Banner、会话、评测用例都会丢。
+    生产上回滚前必须先备份（``mysqldump``），这一步不该指望迁移自己兜。
+    """
+    conn = op.get_bind()
+
+    # 每次现查一次（inspector 会缓存反射结果，DDL 之后再用同一个实例会读到旧结构）
+    def _index_names(table):
+        return {ix["name"] for ix in inspect(conn).get_indexes(table)}
+
+    def _unique_names(table):
+        return {c["name"] for c in inspect(conn).get_unique_constraints(table)}
+
+    def _drop_constraints_using(table, columns):
+        """删掉引用这些列的外键约束。
+
+        MySQL 不允许在列还被外键引用时直接 DROP COLUMN（报 1828），
+        必须先删约束——这一点是真实跑了一遍 round-trip 用例才发现的。
+        """
+        for fk in inspect(conn).get_foreign_keys(table):
+            if set(fk.get("constrained_columns") or ()) & set(columns):
+                op.drop_constraint(fk["name"], table, type_="foreignkey")
+
+    # ---- 1) 先删掉指向 V2 表的外键列 ----
+    v2_columns = (
+        (
+            "order_items",
+            ("sku_id", "sku_name", "sku_spec"),
+        ),
+        ("cart_items", ("sku_id",)),
+        (
+            "orders",
+            (
+                "paid_at",
+                "refund_from_status",
+                "refund_reason",
+                "refund_note",
+                "refunded_at",
+            ),
+        ),
+    )
+    for table, columns in v2_columns:
+        if not _table_exists(conn, table):
+            continue
+        _drop_constraints_using(table, columns)
+        if table == "cart_items" and "uq_cart_user_sku" in _unique_names(table):
+            # InnoDB 的两个约束会互相卡住，顺序必须是：
+            #   ① 先补一个 (user_id) 的普通索引 —— 它原本是 user_id 外键的支撑索引，
+            #      而这个支撑索引就是下面那个唯一索引（user_id, sku_id）本身；
+            #   ② 有了替代索引，才允许删掉唯一约束（否则报 1553）；
+            #   ③ 最后才删列。
+            # 直接删列也不行：复合唯一索引会退化成 UNIQUE(user_id)，
+            # 那等于「一个用户只能有一条购物车记录」，比报错更糟。
+            if "ix_cart_items_user_id" not in _index_names(table):
+                op.create_index("ix_cart_items_user_id", table, ["user_id"])
+            op.drop_constraint("uq_cart_user_sku", table, type_="unique")
+        for column in columns:
+            if _column_exists(conn, table, column):
+                op.drop_column(table, column)
+
+    # ---- 2) 删掉建在基础列上的索引（列本身属于 V1，不删） ----
+    if _table_exists(conn, "orders") and "ix_orders_order_no" in _index_names("orders"):
+        op.drop_index("ix_orders_order_no", table_name="orders")
+
+    # ---- 3) 删 V2 新增的表：先子表后父表 ----
+    for table in (
+        "chat_messages",      # 外键指向 chat_sessions
+        "chat_sessions",
+        "eval_test_cases",
+        "favorites",
+        "banners",
+        "product_skus",       # 最后删：前面已经把引用它的列删干净了
+    ):
+        if _table_exists(conn, table):
+            op.drop_table(table)

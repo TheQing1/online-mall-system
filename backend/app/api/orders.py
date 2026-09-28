@@ -5,7 +5,6 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
-from app.core.config import settings
 from app.core.ratelimit import rate_limit
 from app.schemas.order import (
     OrderCreate,
@@ -21,7 +20,7 @@ router = APIRouter()
 @router.post(
     "",
     response_model=OrderOut,
-    dependencies=[Depends(rate_limit("order", settings.rate_limit_order))],
+    dependencies=[Depends(rate_limit("order"))],
 )
 def create_order(
     data: OrderCreate,

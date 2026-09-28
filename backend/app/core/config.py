@@ -76,9 +76,15 @@ class Settings(BaseSettings):
     # 商品详情/分类的缓存时长（秒）。下单路径靠条件 UPDATE 保证不超卖，
     # 所以展示层短暂陈旧是可以接受的，见 product_service 的说明。
     cache_product_ttl: int = 60
+    # 负缓存（查不到的结果）的存活时间。短一点：既要挡住穿透，又不能让
+    # 「刚上架的商品」在缓存里继续查不到。
+    cache_negative_ttl: int = 30
 
     # --- 限流（固定窗口）---
     rate_limit_window_seconds: int = 60
+    # 全站兜底配额（按用户/来源 IP）：挡住「拿到一个 token 就无限刷」以及爬虫。
+    # 配成 0 表示关闭——压测时必须关，否则量到的是限流器而不是业务。
+    rate_limit_api: int = 300
     rate_limit_login: int = 10
     rate_limit_order: int = 20
     rate_limit_chat: int = 20

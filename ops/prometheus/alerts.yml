@@ -1,0 +1,65 @@
+# 告警规则：指标有了没人看等于没有，这里把「该有人管」的情况挑出来。
+#
+# 阈值都是按本项目单机部署的量级定的，上生产要按容量重算——
+# 但结构（错误率、尾延迟、依赖降级、滥用、定时任务、有没有流量）是通用的。
+groups:
+  - name: online-mall
+    rules:
+      - alert: ApiHighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(http_requests_total[5m])), 1) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "接口 5xx 比例超过 5%"
+          description: "过去 5 分钟 5xx 占比 {{ $value | humanizePercentage }}，先看日志里的 request_id。"
+
+      - alert: ApiSlowRequests
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le, path)
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "接口 P99 超过 1 秒（{{ $labels.path }}）"
+          description: "持续 10 分钟。缓存命中率、慢查询、重排模型都可能相关。"
+
+      - alert: RedisUnavailable
+        expr: redis_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis 不可用，服务已降级"
+          description: "缓存、限流、分布式锁都失效：读请求会直接压到 MySQL。"
+
+      - alert: RateLimitSpike
+        expr: sum by (scope) (rate(rate_limit_blocked_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "限流拦截激增（scope={{ $labels.scope }}）"
+          description: "每秒超过 1 次被拦：可能是有人刷接口，也可能是配额定得太紧误伤正常用户。"
+
+      - alert: BackgroundTaskFailing
+        expr: increase(background_task_runs_total{result="error"}[15m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "定时任务（{{ $labels.task }}）执行失败"
+          description: "超时关单失败会直接导致库存不回补。"
+
+      - alert: NoTraffic
+        expr: sum(rate(http_requests_total[10m])) == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "10 分钟没有任何请求"
+          description: "要么真的没人用，要么流量进不来（nginx、端口映射、健康检查）。"

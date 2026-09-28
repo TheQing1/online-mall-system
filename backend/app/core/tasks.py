@@ -16,11 +16,13 @@ import logging
 from app.core.database import SessionLocal
 from app.core.locks import redis_lock
 from app.core.logging_config import setup_logging
+from app.core.metrics import background_task_runs_total
 from app.services import order_service
 
 logger = logging.getLogger(__name__)
 
 _LOCK_NAME = "cancel_expired_orders"
+_TASK_NAME = "cancel_expired_orders"
 
 
 async def _cancel_expired_orders_loop(interval_seconds: int = 30):
@@ -28,6 +30,7 @@ async def _cancel_expired_orders_loop(interval_seconds: int = 30):
         try:
             await asyncio.to_thread(_cancel_expired_orders_once)
         except Exception:
+            background_task_runs_total.labels(task=_TASK_NAME, result="error").inc()
             logger.exception("订单超时检查失败")
         await asyncio.sleep(interval_seconds)
 
@@ -39,6 +42,7 @@ def _cancel_expired_orders_once() -> int:
     with redis_lock(_LOCK_NAME, ttl_seconds=60) as handle:
         if not handle.acquired:
             logger.debug("另一个副本正在执行关单，本轮跳过")
+            background_task_runs_total.labels(task=_TASK_NAME, result="skipped").inc()
             return 0
         if handle.degraded:
             logger.debug("Redis 不可用，本轮无锁执行（任务幂等）")
@@ -46,6 +50,7 @@ def _cancel_expired_orders_once() -> int:
         db = SessionLocal()
         try:
             count = order_service.auto_cancel_expired_orders(db)
+            background_task_runs_total.labels(task=_TASK_NAME, result="ok").inc()
             if count:
                 logger.info("自动取消超时订单 %s 笔", count)
             return count

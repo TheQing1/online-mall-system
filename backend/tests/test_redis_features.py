@@ -7,7 +7,6 @@
 默认用 db 9 并在每个用例前后 flushdb，避免污染开发用的数据。
 """
 
-import os
 import threading
 
 import pytest
@@ -19,32 +18,8 @@ from app.models.order import Order, OrderStatus
 
 from tests.conftest import auth_header, create_address, create_product
 
-pytestmark = pytest.mark.redis
-
-
-@pytest.fixture(autouse=True)
-def redis_db():
-    """连上测试用 Redis；连不上就跳过，并在用例前后清库。
-
-    结束时必须把 ``settings.redis_url`` 还原：否则后面的用例会连上真实 Redis，
-    缓存跨用例生效，出现「单跑通过、全跑失败」的经典污染
-    （本项目真踩过：5 个后台管理用例因此报错）。
-    """
-    original = settings.redis_url
-    settings.redis_url = os.environ.get(
-        "TEST_REDIS_URL", "redis://127.0.0.1:6379/9"
-    )
-    cache.reset_client()
-    client = get_redis()
-    if client is None:
-        settings.redis_url = original
-        cache.reset_client()
-        pytest.skip("没有可用的 Redis，跳过（用 -m redis 单跑需要本机/CI 提供 Redis）")
-    client.flushdb()
-    yield client
-    client.flushdb()
-    settings.redis_url = original
-    cache.reset_client()
+# redis_db 夹具在 conftest 里，这里所有用例都依赖它（包括间接依赖 API 的那些）
+pytestmark = [pytest.mark.redis, pytest.mark.usefixtures("redis_db")]
 
 
 # --- 缓存 ---
@@ -128,6 +103,35 @@ def test_rate_limited_response_tells_client_when_to_retry(client):
     assert res.status_code == 429
     assert res.headers.get("Retry-After")
     assert "秒后" in res.json()["detail"]
+
+
+def test_global_api_limit_covers_every_endpoint(client, monkeypatch):
+    """全站兜底配额：任何业务接口都会被计数（这里拿最普通的商品列表验）。"""
+    monkeypatch.setattr(settings, "rate_limit_api", 3)
+
+    statuses = [client.get("/api/v1/products").status_code for _ in range(4)]
+
+    assert statuses[:3] == [200, 200, 200]
+    assert statuses[3] == 429
+
+
+def test_global_limit_counts_across_different_endpoints(client, monkeypatch):
+    """配额是「按身份」的总量，不是「每个接口各一份」——否则绕一绕就绕开了。"""
+    monkeypatch.setattr(settings, "rate_limit_api", 2)
+
+    first = client.get("/api/v1/products").status_code
+    second = client.get("/api/v1/banners").status_code
+    third = client.get("/api/v1/products/categories").status_code
+
+    assert (first, second) == (200, 200)
+    assert third == 429
+
+
+def test_zero_quota_disables_the_limit(client, monkeypatch):
+    """配额配 0 = 关闭。压测时必须能关，否则量到的是限流器而不是业务。"""
+    monkeypatch.setattr(settings, "rate_limit_api", 0)
+
+    assert all(client.get("/api/v1/products").status_code == 200 for _ in range(12))
 
 
 # --- 分布式锁 ---

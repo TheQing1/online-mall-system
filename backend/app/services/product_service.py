@@ -5,7 +5,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import selectinload
 from fastapi import HTTPException
 
-from app.core.cache import cache_delete, cache_delete_prefix, cache_get, cache_set
+from app.core.cache import (
+    cache_delete,
+    cache_delete_prefix,
+    cache_get_or_load,
+    jittered_ttl,
+)
 from app.core.config import settings
 from app.models.product import Product, Category, ProductStatus
 from app.models.sku import ProductSku
@@ -119,17 +124,32 @@ def get_products(
 ):
     """公开商品列表（仅上架），支持搜索、分类筛选、排序、分页。
 
-    结果按查询参数缓存 ``CACHE_PRODUCT_TTL`` 秒。库存/销量在这里可能短暂陈旧，
-    这是有意的取舍：下单路径用条件 UPDATE 在事务里再校验一次库存，
+    结果按查询参数缓存 ``CACHE_PRODUCT_TTL`` 秒（带抖动）。库存/销量在这里可能
+    短暂陈旧，这是有意的取舍：下单路径用条件 UPDATE 在事务里再校验一次库存，
     真正保证不超卖；展示层为了抗热点读，接受秒级的陈旧。
     """
     cache_key = _PRODUCT_LIST_PREFIX + hashlib.sha1(
         f"{page}|{page_size}|{keyword}|{category_id}|{sort_by}|{sort_order}".encode()
     ).hexdigest()[:16]
-    cached = cache_get(cache_key)
-    if cached is not None:
-        return cached
+    return cache_get_or_load(
+        cache_key,
+        jittered_ttl(settings.cache_product_ttl),
+        lambda: _load_products(
+            db, page, page_size, keyword, category_id, sort_by, sort_order
+        ),
+    )
 
+
+def _load_products(
+    db: Session,
+    page: int,
+    page_size: int,
+    keyword: Optional[str],
+    category_id: Optional[int],
+    sort_by: str,
+    sort_order: str,
+) -> dict:
+    """真正查库并组装列表响应（缓存的加载器）。"""
     # 查询理解（归一化 / 分词 / 同义词 / AND→OR 兜底）全在 search 层，
     # 这里只管分页、排序与缓存
     query, name_hit_score = search.apply_product_search(
@@ -170,17 +190,25 @@ def get_products(
         "page": page,
         "page_size": page_size,
     }
-    cache_set(cache_key, payload, settings.cache_product_ttl)
     return payload
 
 
 def get_product(db: Session, product_id: int) -> Optional[dict]:
-    """商品详情（仅上架），带缓存。"""
-    cache_key = f"{_PRODUCT_DETAIL_PREFIX}{product_id}"
-    cached = cache_get(cache_key)
-    if cached is not None:
-        return cached
+    """商品详情（仅上架），带缓存与负缓存。
 
+    不存在的 id 也会缓存一小会儿：否则有人拿随机 id 刷接口时，每次都会绕开
+    缓存直接查库——这就是**缓存穿透**。
+    """
+    cache_key = f"{_PRODUCT_DETAIL_PREFIX}{product_id}"
+    return cache_get_or_load(
+        cache_key,
+        jittered_ttl(settings.cache_product_ttl),
+        lambda: _load_product(db, product_id),
+        negative_ttl=settings.cache_negative_ttl,
+    )
+
+
+def _load_product(db: Session, product_id: int) -> Optional[dict]:
     product = (
         db.query(Product)
         .options(selectinload(Product.skus))
@@ -189,24 +217,24 @@ def get_product(db: Session, product_id: int) -> Optional[dict]:
     )
     if product is None:
         return None
-    payload = _to_json(ProductOut.model_validate(product))
-    cache_set(cache_key, payload, settings.cache_product_ttl)
-    return payload
+    return _to_json(ProductOut.model_validate(product))
 
 
 def get_categories(db: Session):
     """分类树（两级），带缓存。"""
-    cached = cache_get(_CATEGORY_KEY)
-    if cached is not None:
-        return cached
+    return cache_get_or_load(
+        _CATEGORY_KEY,
+        jittered_ttl(settings.cache_product_ttl),
+        lambda: _load_categories(db),
+    )
 
+
+def _load_categories(db: Session) -> list:
     categories = db.query(Category).order_by(Category.sort).all()
     root = [c for c in categories if c.parent_id is None]
     for r in root:
         r.children = [c for c in categories if c.parent_id == r.id]
-    payload = [_to_json(CategoryOut.model_validate(c)) for c in root]
-    cache_set(_CATEGORY_KEY, payload, settings.cache_product_ttl)
-    return payload
+    return [_to_json(CategoryOut.model_validate(c)) for c in root]
 
 
 def search_products(db: Session, keyword: str, limit: int = 5):

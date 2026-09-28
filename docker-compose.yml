@@ -121,7 +121,45 @@ services:
     ports:
       - "80:80"
 
+  # ---- 可观测性（可选，默认不启动）----
+  # 起法：docker compose --profile observability up -d
+  # 默认不启是因为这两个镜像加起来几百 MB，而「看一眼商城」并不需要它们。
+  # 后端自己的 /metrics 始终可用（curl localhost:8000/metrics）。
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    profiles: ["observability"]
+    restart: unless-stopped
+    volumes:
+      # 抓取目标与告警规则都在这里，改完 reload 即可（见 README）
+      - ./ops/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    profiles: ["observability"]
+    restart: unless-stopped
+    environment:
+      # 本地演示用默认口令；真实部署必须覆盖
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./ops/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+
 volumes:
   mysql-data:
   mall-data:
   redis-data:
+  prometheus-data:
+  grafana-data:
