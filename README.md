@@ -19,14 +19,19 @@
   还刻意放了多组近义干扰文档）。同一套评测集、同一条线上代码路径上测出三级提升：
   纯向量 recall@1 84.3% → **BM25 混合检索 90.2%** → **再加交叉编码器重排 92.2%，
   且 recall@3 达到 100%**（进 Prompt 的就是 top-3）；
-- **工程化**：Alembic 幂等迁移（含可用的 downgrade）、87 个 pytest 用例（覆盖率 76%）、
+- **工程化**：Alembic 幂等迁移（**可回滚**，有真实 MySQL 往返用例）、113 个 pytest 用例（覆盖率 77%）、
   **10 个 Playwright 端到端用例**（真浏览器 + 控制台零报错 + 样式生效断言）、
   GitHub Actions CI、Docker Compose 一键部署（多阶段镜像 + 非 root + HEALTHCHECK）；
   前端 Element Plus 按需引入，`dist` 体积减半（1579KB → 762KB）。
 - **抗读压力与防滥用**：商品读路径走 Redis 缓存（50 并发实测 **P99 51ms → 23ms**，
-  中位数 8ms → 5ms）；登录/下单/AI 对话按用户或 IP 限流；关单任务用 Redis
+  中位数 8ms → 5ms），并针对缓存的三个经典问题都做了防护——**击穿**（热点 key 过期时
+  按 key 单飞，10 个并发只查一次库）、**穿透**（查不到的 id 走短 TTL 负缓存）、
+  **雪崩**（TTL 抖动）；全站兜底限流 + 登录/下单/AI 对话的独立配额；关单任务用 Redis
   分布式锁串行化并拆成独立 worker，API 进程可以放心多副本；**Redis 不可用时自动降级**，
-  只丢缓存和限流、不影响业务；日志带 request_id，并暴露 Prometheus `/metrics`。
+  只丢缓存和限流、不影响业务。
+- **可观测性闭环**：结构化日志 + request_id（响应头回写）、Prometheus 指标
+  （请求/延迟/缓存命中/限流拦截/依赖可用性/定时任务），并配好 **6 条告警规则 +
+  Grafana 看板**——不是「有指标」，而是「指标有人看、出事有人管」。
 
 ## 技术栈
 
@@ -37,7 +42,7 @@
 | 后端 API | FastAPI + SQLAlchemy 2.0 + Pydantic v2 |
 | 数据库 | MySQL 8.0（Alembic 迁移管理，14 张表） |
 | 缓存/限流/锁 | Redis 7（不可用时自动降级为无缓存、不限流，见 `app/core/cache.py`） |
-| 可观测性 | 结构化日志 + request_id + Prometheus `/metrics` |
+| 可观测性 | 结构化日志 + request_id + Prometheus + Grafana + 告警规则 |
 | 向量存储 | ChromaDB（原生客户端，本地持久化） |
 | 检索 | 向量召回 + BM25（jieba 分词）加权融合，可选交叉编码器重排，见 `app/ai/retriever.py` |
 | AI 框架 | LangChain 0.3.x（RAG：切片 → BGE Embedding → 混合检索 → 生成） |
@@ -45,7 +50,7 @@
 | 大模型 | DeepSeek（OpenAI 兼容接口，模型名 `deepseek-flash`） |
 | 认证 | JWT（python-jose + bcrypt） |
 | 部署 | Docker Compose + Nginx（多阶段构建、非 root、HEALTHCHECK、自动迁移 + 种子数据） |
-| 测试 | pytest + httpx（87 个用例：认证/订单全流程/越权/回归/搜索/缓存与限流/RAG 召回与重排/真实 MySQL 并发） |
+| 测试 | pytest + httpx（113 个用例：认证/订单全流程/越权/回归/搜索/缓存与限流/上传校验/迁移回滚/RAG 召回与重排/真实 MySQL 并发） |
 | 质量 | ruff + pytest-cov + ESLint + Prettier + GitHub Actions |
 
 ## 功能概览
@@ -139,6 +144,16 @@ Compose 一共 5 个服务：`mysql`、`redis`、`backend`（API）、`worker`�
 同镜像不同入口）、`web`（Nginx + 两个前端产物）。API 进程里 **不跑**定时任务
 （`RUN_BACKGROUND_TASKS=false`），所以 backend 可以放心扩到多副本。
 
+另外还有两个**可观测性服务**，默认不启（镜像加起来几百 MB，而「看一眼商城」并不需要它们）：
+
+```bash
+docker compose --profile observability up -d   # 额外起 prometheus + grafana
+# Prometheus: http://localhost:9090    Grafana: http://localhost:3000（admin / admin）
+```
+
+只要指标本身的话不需要任何额外服务：`curl localhost:8000/metrics` 就能拿到
+（nginx 没有反代 `/metrics`，所以它不随站点对外暴露）。
+
 ## 默认账号
 
 | 角色 | 用户名 | 密码 |
@@ -183,7 +198,7 @@ MAX_UPLOAD_SIZE=2097152
 │  ├─ app/ai            # RAG 链路（loader/vectorstore/indexer/rag/eval_dataset）
 │  ├─ app/core          # 配置/安全/数据库/缓存/限流/锁/日志/指标/后台任务
 │  ├─ alembic           # 数据库迁移
-│  ├─ tests             # 87 个 pytest 用例
+│  ├─ tests             # 113 个 pytest 用例
 │  └─ data/             # 运行时生成：向量库 + Embedding 模型缓存（已 gitignore）
 ├─ docs/interview-qa.md # 面试问答（与代码同步维护）
 ├─ docs/resume-project.md # 简历描述三版 + 数字证据索引
@@ -202,29 +217,35 @@ MAX_UPLOAD_SIZE=2097152
 
 - 重排只在 CPU 上跑（每条问题约 0.6 秒）。上生产要么换 GPU，要么换更小的
   cross-encoder；也没有做重排结果的缓存，同一个问题反复问会重复计算；
-- 前端无 TypeScript、无单元测试（有 10 个 Playwright 端到端冒烟测试，但没进 CI——
-  需要同时起后端、MySQL、Redis 与两个前端，成本高，目前是本地手动跑）；
+- 前端无 TypeScript、无单元测试；端到端测试（10 个 Playwright 用例）已经进 CI，
+  但它只覆盖「页面能用」这一层，组件内部的逻辑仍然没有单测兜着；
   商城前台的全局路由守卫已是唯一权威判断，
   但各页面里还留着早期手写的 `onMounted` 登录判断（现在属于冗余代码，可删）；
-- `alembic downgrade` 只有索引迁移是真实可用的；V2 那个大迁移的 `downgrade()` 仍是
-  `pass`（命令成功退出但什么都不回滚），需要补齐；
-- JWT 存 localStorage、无 refresh token；登录/下单/聊天已限流，但**其余接口不限流**；
+- JWT 存 localStorage、无 refresh token；
   部署为 HTTP，无 HTTPS，安全响应头已配但 HSTS 仍注释着（等 HTTPS 终结后再开）；
 - compose 把 backend 的 8000 端口直接映射到宿主机（方便用 `/docs` 调试），
   因此 entrypoint 里的 `--forwarded-allow-ips='*'` 是有折扣的信任：
   能直连 8000 的客户端可以伪造 `X-Forwarded-For`。生产应去掉该端口映射，
   或把 `*` 收紧成 nginx 所在网段；
-- 缓存是多副本共享的 Redis，但没有做本地多级缓存：Redis 挂掉的降级期内，
-  所有读请求会直接压到 MySQL（有缓存击穿的风险，生产上一般再加 singleflight 或
-  本地缓存兜底）；
+- 缓存只做了 Redis 单级 + 进程内单飞：Redis 挂掉的降级期内读请求会直接压到 MySQL，
+  多副本部署时单飞也只在进程内生效（要彻底解决得用分布式单飞 + 本地多级缓存）；
 - 限流是固定窗口，窗口边界可能出现两倍突发；也没有按用户等级/接口成本做差异化配额；
+- 告警规则写好了，但没有接通知渠道（Alertmanager / 钉钉机器人），
+  也没有做指标的长期存储与容量规划；
 - 模型缓存首次启动需联网从 ModelScope 下载（约 100MB）；
-- 上传只校验扩展名、不校验文件魔数；商品图存本地盘，生产应上对象存储。
+- 上传做了扩展名白名单 + 文件头（魔数）校验，但魔数挡不住精心构造的多格式文件，
+  彻底的做法是解码后重新编码再落盘；商品图仍存本地盘，生产应上对象存储。
 
 > 已修复、因此不再列在上面的：模型缓存曾放在 Python 包内部（compose 的 volume 会遮蔽
 > `app/models/*.py`，重建镜像后容器仍在跑旧代码）；`orders` 缺少覆盖「每 30 秒定时关单
 > 扫描」的索引；后端镜像 root 运行、无 HEALTHCHECK；nginx 默认 `client_max_body_size`
 > 为 1m 导致传图必然 413；商城前台没有全局路由守卫；`/placeholder.png` 资源缺失。
+>
+> 这一轮补掉的：V2 迁移的 `downgrade()` 从 `pass` 变成**真实可用的回滚**
+> （有真实 MySQL 的 upgrade→downgrade→upgrade 往返用例守着）；上传补了**文件头（魔数）校验**，
+> 改个后缀传脚本会被拒；限流从「只有三个接口」变成**全站兜底 + 分接口配额**；
+> 缓存补了**击穿 / 穿透 / 雪崩**三道防护；加了 **6 条告警规则 + Grafana 看板**；
+> 10 个端到端用例**进了 CI**。
 
 ## 运行测试
 
@@ -235,14 +256,15 @@ cd backend
 ../.venv/Scripts/python -m pytest
 ```
 
-**默认 76 个用例完全自包含**：不需要 MySQL、Redis、联网——用例跑在 SQLite 上，
+**默认 96 个用例完全自包含**：不需要 MySQL、Redis、联网——用例跑在 SQLite 上，
 向量部分使用确定性假 Embedding、重排用桩模型。CI 里额外跑 `ruff check` 与覆盖率。
 
-另外 **11 个用例需要真实基础设施**，连不上时自动 skip、不会让 CI 变红：
+另外 **17 个用例需要真实基础设施**，连不上时自动 skip、不会让 CI 变红（CI 里由
+`infra-integration` 任务起真容器跑，并且「被 skip 就判定失败」）：
 
 ```bash
-cd backend && pytest -m mysql -v          # 4 个：并发防超卖 / 幂等支付 / 外键 / InnoDB 校验
-cd backend && pytest -m redis -v          # 7 个：缓存读写与失效 / 限流 429 / 分布式锁互斥
+cd backend && pytest -m mysql -v    # 5 个：并发防超卖 / 幂等支付 / 外键 / InnoDB 校验 / 迁移回滚
+cd backend && pytest -m redis -v    # 13 个：缓存三层防护 / 限流配额 / 分布式锁互斥
 ```
 
 按模块运行：
@@ -265,10 +287,12 @@ pytest -m mysql -v                      # 真实 MySQL / InnoDB 集成（连不�
 cd frontend && npm run test:e2e
 ```
 
-> 跑 E2E 前要把后端限流配额调大：登录接口按 IP 限流（默认 **10 次/分钟**），
-> 而 E2E 每轮会登录 3 次，连续跑几轮就会自己撞上 429。
+CI 里有一个独立的 `e2e` 任务跑这套用例（起 MySQL + Redis + API + 两个前端）。
+
+> 本地跑之前要把后端限流配额调大：全站兜底是 300/分，登录是 10/分，
+> 而 E2E 一轮要发几十个请求、登录 3 次，连跑几轮就会自己撞上 429。
 > 这不是 bug，是限流真的在生效——测试环境的正确做法是放宽配额：
-> `RATE_LIMIT_LOGIN=1000 uvicorn app.main:app --port 8000`。
+> `RATE_LIMIT_API=0 RATE_LIMIT_LOGIN=1000 uvicorn app.main:app --port 8000`。
 
 覆盖范围：注册/登录/JWT、商品列表/详情/SKU、购物车库存校验（含累加上限）、
 下单 → 支付 → 发货 → 确认收货 → 退款全流程、取消回补库存、订单超时自动关单、
@@ -351,11 +375,40 @@ cd frontend && npm run test:e2e
 - 单 worker 单机，**不代表生产容量**——它证明的是「加了这些之后没有把读路径拖慢」，
   以及缓存确实在起作用。
 
+## 可观测性
+
+后端在 `/metrics` 暴露 Prometheus 指标（nginx 没有反代它，只对本机/监控网段可见）：
+
+| 指标 | 用途 |
+|---|---|
+| `http_requests_total{method,path,status}` | 按**路由模板**聚合——用原始路径的话每个商品 id 都是一条时间序列，label 基数会炸 |
+| `http_request_duration_seconds` | 延迟直方图，算 P95 / P99 |
+| `cache_operations_total{result}` | 命中 / 未命中 / 写入 / 负缓存：看缓存到底有没有在起作用 |
+| `rate_limit_blocked_total{scope}` | 被限流拦截的次数：既看滥用，也看「配额是不是配紧了误伤正常用户」 |
+| `redis_up` | Redis 是否可用（0 = 已降级为无缓存、不限流） |
+| `background_task_runs_total{task,result}` | 定时任务执行 / 跳过 / 失败——关单失败会直接导致库存不回补 |
+
+配上 6 条告警规则（5xx 比例、P99 超 1 秒、Redis 降级、限流激增、定时任务失败、
+十分钟没有流量）和一块 Grafana 看板：
+
+```bash
+docker compose --profile observability up -d
+# Grafana http://localhost:3000（admin/admin）里会自动出现「Online Mall · API 概览」看板
+```
+
+> 为什么自己用 `prometheus_client` 写指标，而不是用 `prometheus-fastapi-instrumentator`：
+> 后者 8.x 要求 `starlette>=1.0`，与本项目锁定的 FastAPI 0.115（要求 `<0.39`）冲突，
+> 装上 `pip check` 直接报依赖不一致。自己写不到 60 行，还能**复用访问日志里已经算好的
+> 耗时**（计时只做一次，两个消费者）。
+
+> 已知边界：告警规则写好了，但没接通知渠道（Alertmanager / 钉钉机器人），
+> 也没有指标的长期存储与容量规划。
+
 ## 代码质量
 
 ```bash
 cd backend && ruff check .                      # 静态检查（F/E9：只拦真 bug）
-cd backend && pytest --cov=app --cov-report=term-missing   # 当前 76%，CI 门槛 70%
+cd backend && pytest --cov=app --cov-report=term-missing   # 当前 77%，CI 门槛 70%
 
 cd frontend && npm run lint && npm run build    # 两个前端都需 lint + 构建通过
 cd admin    && npm run lint && npm run build
