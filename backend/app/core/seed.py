@@ -3,6 +3,8 @@
 运行方式: cd backend && python -m app.core.seed
 """
 
+import os
+
 from app.ai.eval_dataset import EVAL_CASES, KNOWLEDGE_DOCS
 from app.core.database import SessionLocal
 from app.models.content import Banner
@@ -380,7 +382,11 @@ def main():
     db = SessionLocal()
     try:
         seed(db)
-        if db.query(KnowledgeDoc).count():
+        if os.environ.get("SEED_SKIP_VECTOR", "").lower() in ("1", "true", "yes"):
+            # CI 里跑端到端测试时用：同步向量索引会去下载 100MB 的 BGE 模型，
+            # 而那套用例根本不碰知识库。需要检索的用例（rag_quality）单独跑。
+            print("[SKIP] SEED_SKIP_VECTOR=1，跳过向量索引同步")
+        elif db.query(KnowledgeDoc).count():
             try:
                 from app.ai.indexer import sync_all_knowledge
 
