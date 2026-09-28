@@ -16,7 +16,7 @@ export default defineConfig({
   testDir: './e2e',
   timeout: 30_000,
   fullyParallel: false,
-  reporter: [['list']],
+  reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     viewport: { width: 1440, height: 900 },
     screenshot: 'only-on-failure',
