@@ -10,6 +10,7 @@ from fastapi import (
     HTTPException,
     Query,
     UploadFile,
+    status,
 )
 from sqlalchemy.orm import Session
 
@@ -18,6 +19,7 @@ from app.ai.retriever import retrieve
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_current_admin
+from app.core.uploads import validate_image_file
 from app.models.knowledge import KnowledgeCategory
 from app.models.chat import EvalTestCase
 from app.schemas.common import PageResponse, MessageResponse
@@ -435,12 +437,17 @@ def run_eval(
 async def upload_image(
     file: UploadFile = File(...), admin=Depends(get_current_admin)
 ):
-    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
-    if ext not in ("jpg", "jpeg", "png", "gif", "webp"):
-        raise HTTPException(status_code=400, detail="仅支持 jpg/png/gif/webp 格式")
-    contents = await file.read()
+    # 多读 1 字节：超限时立刻拒掉，而不是先把整个文件读进内存
+    contents = await file.read(settings.max_upload_size + 1)
     if len(contents) > settings.max_upload_size:
-        raise HTTPException(status_code=400, detail="图片大小不能超过 2MB")
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"图片不能超过 {settings.max_upload_size // 1024 // 1024}MB",
+        )
+    try:
+        ext = validate_image_file(file.filename or "", contents)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     filename = f"{uuid.uuid4().hex}.{ext}"
     upload_path = os.path.join(settings.upload_dir, filename)
     os.makedirs(settings.upload_dir, exist_ok=True)

@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 import logging
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
@@ -9,6 +9,7 @@ import os
 from app.core.config import settings, startup_problems
 from app.core.logging_config import RequestContextMiddleware, setup_logging
 from app.core.metrics import metrics_response
+from app.core.ratelimit import rate_limit
 from app.core.tasks import start_background_tasks
 
 setup_logging()
@@ -64,14 +65,35 @@ from app.api import (
     admin,
 )
 
-app.include_router(auth.router, prefix="/api/v1/auth", tags=["认证"])
-app.include_router(products.router, prefix="/api/v1/products", tags=["商品"])
-app.include_router(banners.router, prefix="/api/v1/banners", tags=["运营"])
-app.include_router(users.router, prefix="/api/v1/users", tags=["用户"])
-app.include_router(cart.router, prefix="/api/v1/cart", tags=["购物车"])
-app.include_router(orders.router, prefix="/api/v1/orders", tags=["订单"])
-app.include_router(ai_chat.router, prefix="/api/v1/ai-chat", tags=["AI客服"])
-app.include_router(admin.router, prefix="/api/v1/admin", tags=["管理后台"])
+# 全站兜底限流：所有业务接口都按「用户 / 来源 IP」限一个总配额，
+# 个别接口再叠加更严的配额（登录 10/分、下单 20/分、AI 对话 20/分）。
+# 配额配成 0 可以关掉，压测时用得上。
+api_guard = [Depends(rate_limit("api"))]
+
+app.include_router(
+    auth.router, prefix="/api/v1/auth", tags=["认证"], dependencies=api_guard
+)
+app.include_router(
+    products.router, prefix="/api/v1/products", tags=["商品"], dependencies=api_guard
+)
+app.include_router(
+    banners.router, prefix="/api/v1/banners", tags=["运营"], dependencies=api_guard
+)
+app.include_router(
+    users.router, prefix="/api/v1/users", tags=["用户"], dependencies=api_guard
+)
+app.include_router(
+    cart.router, prefix="/api/v1/cart", tags=["购物车"], dependencies=api_guard
+)
+app.include_router(
+    orders.router, prefix="/api/v1/orders", tags=["订单"], dependencies=api_guard
+)
+app.include_router(
+    ai_chat.router, prefix="/api/v1/ai-chat", tags=["AI客服"], dependencies=api_guard
+)
+app.include_router(
+    admin.router, prefix="/api/v1/admin", tags=["管理后台"], dependencies=api_guard
+)
 
 
 @app.get("/")

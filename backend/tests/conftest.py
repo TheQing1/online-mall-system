@@ -1,4 +1,5 @@
 import sys
+import os
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,34 @@ def _isolate_redis():
     settings.redis_url = "redis://127.0.0.1:1/0"
     reset_client()
     yield
+    settings.redis_url = original
+    reset_client()
+
+
+@pytest.fixture()
+def redis_db():
+    """连上测试用 Redis（默认 db 9）；连不上就 skip，用完清库并还原配置。
+
+    需要真实缓存的用例显式请求它（例如缓存击穿的单飞、负缓存）。
+
+    结束时必须把 ``settings.redis_url`` 还原：否则后面的用例会连上真实 Redis，
+    缓存跨用例生效，出现「单跑通过、全跑失败」的经典污染。
+    """
+    from app.core.cache import get_redis
+
+    original = settings.redis_url
+    settings.redis_url = os.environ.get(
+        "TEST_REDIS_URL", "redis://127.0.0.1:6379/9"
+    )
+    reset_client()
+    client = get_redis()
+    if client is None:
+        settings.redis_url = original
+        reset_client()
+        pytest.skip("没有可用的 Redis，跳过（用 -m redis 单跑需要本机/CI 提供 Redis）")
+    client.flushdb()
+    yield client
+    client.flushdb()
     settings.redis_url = original
     reset_client()
 

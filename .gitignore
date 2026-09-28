@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+# 本地跑测试时用 --basetemp 指定的临时目录（Windows 上系统临时目录可能不可写）
+.pytest-tmp/
 .ruff_cache/
 .coverage
 coverage.xml

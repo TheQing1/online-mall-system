@@ -11,7 +11,13 @@ Prometheus 打爆，这是 label 基数（cardinality）最经典的坑。Starle
 路由放进 ``scope["route"]``，这里直接取它的 path。
 """
 
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    Counter,
+    Gauge,
+    Histogram,
+    generate_latest,
+)
 from starlette.responses import Response
 
 http_requests_total = Counter(
@@ -25,6 +31,33 @@ http_request_duration_seconds = Histogram(
     "HTTP 请求耗时（秒）",
     ["method", "path"],
     buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
+)
+
+# --- 依赖与业务指标 ---
+# 光有 HTTP 指标不够：出问题时你要能一眼看出「是 Redis 挂了」「是有人在刷接口」
+# 「是定时任务在报错」，而不是只有一条延迟曲线。
+
+redis_up = Gauge(
+    "redis_up",
+    "Redis 是否可用（1=可用，0=已降级为无缓存/不限流）",
+)
+
+cache_operations_total = Counter(
+    "cache_operations_total",
+    "缓存操作次数",
+    ["result"],  # hit / miss / set / negative / error
+)
+
+rate_limit_blocked_total = Counter(
+    "rate_limit_blocked_total",
+    "被限流拒绝的请求数",
+    ["scope"],  # api / login / order / chat
+)
+
+background_task_runs_total = Counter(
+    "background_task_runs_total",
+    "定时任务执行次数",
+    ["task", "result"],  # result: ok / error / skipped
 )
 
 

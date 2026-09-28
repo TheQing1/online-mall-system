@@ -11,11 +11,13 @@
 
 import os
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import inspect as sa_inspect
 
 from app.core.config import settings
 from app.core.security import hash_password
@@ -28,6 +30,29 @@ from app.models.user import User
 from tests.conftest import create_address, create_product
 
 pytestmark = pytest.mark.mysql
+
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+
+# V2 引入的表（downgrade 应该全部删掉）
+V2_TABLES = {
+    "product_skus",
+    "banners",
+    "favorites",
+    "chat_sessions",
+    "chat_messages",
+    "eval_test_cases",
+}
+# V1 就有的基础表（downgrade 必须保留——upgrade 里是「缺了才建」，无法区分归属）
+BASE_TABLES = {
+    "users",
+    "addresses",
+    "categories",
+    "products",
+    "cart_items",
+    "orders",
+    "order_items",
+    "knowledge_docs",
+}
 
 
 def _server_and_db_urls():
@@ -271,3 +296,66 @@ def test_concurrent_pay_is_idempotent_on_innodb(mysql_engine, mysql_session):
     assert refreshed.paid_at is not None
     # 修复前这里是「先读状态再写」，并发支付会把销量累加多次
     assert db.query(Product).filter(Product.id == product.id).first().sales == 1
+
+
+# --- 迁移可回滚 ---
+
+
+def _tables_in(engine) -> set:
+    return set(sa_inspect(engine).get_table_names())
+
+
+def test_alembic_migration_round_trip(monkeypatch):
+    """升级 → 回滚到 base → 再升级，必须都能跑通。
+
+    这个迁移原来的 ``downgrade()`` 是 ``pass``：命令成功退出、却什么都没回滚，
+    是那种「看起来很安全、真出事时才发现回不去」的状态。
+
+    验证点是三件事：
+    1. ``upgrade head`` 之后 V2 的表都在；
+    2. ``downgrade base`` 之后 V2 的表全没了，而 V1 的基础表**还在**
+       （upgrade 里这些表是「缺了才建」，无法区分归属，宁可少删）；
+    3. 再 ``upgrade head`` 能回到同样状态（说明回滚没有留下半截结构）。
+    """
+    from alembic import command
+    from alembic.config import Config
+
+    server_url, _db_url, db_name = _server_and_db_urls()
+    scratch = f"{db_name}_migration"
+
+    server = create_engine(server_url, isolation_level="AUTOCOMMIT")
+    with server.connect() as conn:
+        conn.execute(text(f"DROP DATABASE IF EXISTS `{scratch}`"))
+        conn.execute(
+            text(
+                f"CREATE DATABASE `{scratch}` "
+                "DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+            )
+        )
+
+    # alembic/env.py 是按 settings 现算连接的，所以改库名即可
+    monkeypatch.setattr(settings, "mysql_database", scratch)
+    config = Config(str(BACKEND_DIR / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+
+    scratch_engine = create_engine(
+        f"{server_url}/{scratch}?charset=utf8mb4", pool_pre_ping=True
+    )
+    try:
+        command.upgrade(config, "head")
+        after_upgrade = _tables_in(scratch_engine)
+        assert V2_TABLES <= after_upgrade, V2_TABLES - after_upgrade
+        assert BASE_TABLES <= after_upgrade
+
+        command.downgrade(config, "base")
+        after_downgrade = _tables_in(scratch_engine)
+        assert not (V2_TABLES & after_downgrade), V2_TABLES & after_downgrade
+        assert BASE_TABLES <= after_downgrade, BASE_TABLES - after_downgrade
+
+        command.upgrade(config, "head")
+        assert V2_TABLES <= _tables_in(scratch_engine)
+    finally:
+        scratch_engine.dispose()
+        with server.connect() as conn:
+            conn.execute(text(f"DROP DATABASE IF EXISTS `{scratch}`"))
+        server.dispose()

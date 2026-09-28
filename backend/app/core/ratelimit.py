@@ -18,9 +18,26 @@ from fastapi import HTTPException, Request, status
 
 from app.core.cache import get_redis
 from app.core.config import settings
+from app.core.metrics import rate_limit_blocked_total
 from app.core.security import decode_access_token
 
 logger = logging.getLogger(__name__)
+
+# 各接口的默认配额都从 settings 现读（而不是在装饰时求值），
+# 这样测试和压测可以直接改配置，不用去动已经注册好的依赖。
+_LIMIT_SETTINGS = {
+    "api": "rate_limit_api",
+    "login": "rate_limit_login",
+    "order": "rate_limit_order",
+    "chat": "rate_limit_chat",
+}
+
+
+def _resolve_limit(scope: str, explicit: Optional[int]) -> Optional[int]:
+    if explicit is not None:
+        return explicit
+    setting_name = _LIMIT_SETTINGS.get(scope)
+    return getattr(settings, setting_name) if setting_name else None
 
 
 def client_identity(request: Request) -> str:
@@ -39,10 +56,18 @@ def client_identity(request: Request) -> str:
     return f"ip:{host}"
 
 
-def rate_limit(scope: str, limit: int, window: Optional[int] = None):
-    """构造一个限流依赖：``Depends(rate_limit("login", settings.rate_limit_login))``。"""
+def rate_limit(scope: str, limit: Optional[int] = None, window: Optional[int] = None):
+    """构造一个限流依赖：``Depends(rate_limit("login"))``。
+
+    ``limit`` 缺省时按 ``scope`` 去 settings 里取（见 ``_LIMIT_SETTINGS``）；
+    配额配成 0 或负数表示**关闭**该限流——压测时用得着。
+    """
 
     async def dependency(request: Request) -> None:
+        quota = _resolve_limit(scope, limit)
+        if not quota or quota <= 0:
+            return
+
         client = get_redis()
         if client is None:
             return  # fail-open，见模块文档
@@ -62,8 +87,9 @@ def rate_limit(scope: str, limit: int, window: Optional[int] = None):
             logger.warning("限流检查失败，本次放行：%s", exc)
             return
 
-        if count > limit:
+        if count > quota:
             retry_after = max(int(ttl), 1)
+            rate_limit_blocked_total.labels(scope=scope).inc()
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=f"操作过于频繁，请 {retry_after} 秒后再试",

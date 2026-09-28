@@ -13,13 +13,15 @@
 
 import json
 import logging
+import random
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Dict, Optional
 
 import redis
 
 from app.core.config import settings
+from app.core.metrics import cache_operations_total, redis_up
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +29,74 @@ _client: Optional["redis.Redis"] = None
 _client_lock = threading.Lock()
 _unavailable_until = 0.0
 _RETRY_AFTER_SECONDS = 30.0
+
+# 负缓存的占位值：存进 Redis 的是一段 JSON，所以用一个普通字符串当哨兵
+NEGATIVE_CACHE = "__cache_miss__"
+
+# 单飞用的「按 key 的进程内锁」
+_key_locks: Dict[str, threading.Lock] = {}
+_key_locks_guard = threading.Lock()
+
+
+def jittered_ttl(ttl: int, ratio: float = 0.1) -> int:
+    """给 TTL 加 ±ratio 的随机抖动，最小 1 秒。
+
+    解决**缓存雪崩**：如果一批 key 是同一时刻写入的（比如服务重启后第一次
+    批量预热），它们会在同一秒集体过期，请求会在那一瞬间全压到数据库上。
+    抖动把过期时间打散，代价只是缓存命中率略微下降。
+    """
+    delta = max(1, int(ttl * ratio))
+    return max(1, ttl + random.randint(-delta, delta))
+
+
+def _key_lock(key: str) -> threading.Lock:
+    with _key_locks_guard:
+        lock = _key_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _key_locks[key] = lock
+        return lock
+
+
+def cache_get_or_load(
+    key: str,
+    ttl: int,
+    loader: Callable[[], Any],
+    *,
+    negative_ttl: int = 30,
+) -> Any:
+    """未命中时加载并写回；同一 key 的并发未命中只会真正查一次数据源。
+
+    三层保护分别对应三个经典问题：
+
+    - **缓存击穿**：热点 key 过期的一瞬间，N 个请求同时未命中、同时查库。
+      用「按 key 的进程内锁」做单飞：只有一个请求去加载，其余等它填好缓存后直接读。
+    - **缓存穿透**：查一个根本不存在的 id（或恶意构造的 id）时，每次都绕过缓存打到库里。
+      ``loader`` 返回 None 就写一条很短的**负缓存**兜住。
+    - **缓存雪崩**：见 ``jittered_ttl``，调用方传进来的 TTL 建议先过一遍它。
+
+    诚实说明边界：单飞是**进程内**的，多副本部署时每个副本仍可能各查一次
+    （要彻底解决得用分布式锁 + 短等待）。本项目单实例部署够用，
+    Redis 不可用时这里退化为「每次都查库」，也就是回到没有缓存的样子——
+    不会更差，但也不会更好。
+    """
+    cached = cache_get(key)
+    if cached is not None:
+        return None if cached == NEGATIVE_CACHE else cached
+
+    with _key_lock(key):
+        # 双检：等锁期间可能已经有别的线程把缓存填好了
+        cached = cache_get(key)
+        if cached is not None:
+            return None if cached == NEGATIVE_CACHE else cached
+
+        value = loader()
+        if value is None:
+            cache_set(key, NEGATIVE_CACHE, negative_ttl)
+            cache_operations_total.labels(result="negative").inc()
+        else:
+            cache_set(key, value, ttl)
+        return value
 
 
 def get_redis() -> Optional["redis.Redis"]:
@@ -52,9 +122,11 @@ def get_redis() -> Optional["redis.Redis"]:
             client.ping()
         except Exception as exc:
             _unavailable_until = time.monotonic() + _RETRY_AFTER_SECONDS
+            redis_up.set(0)
             logger.warning("Redis 不可用，降级为无缓存/不限流：%s", exc)
             return None
         _client = client
+        redis_up.set(1)
         logger.info("Redis 已连接：%s", settings.redis_url)
         return _client
 
@@ -73,11 +145,14 @@ def cache_get(key: str) -> Optional[Any]:
     try:
         raw = client.get(key)
     except Exception as exc:
+        cache_operations_total.labels(result="error").inc()
         logger.warning("读缓存失败（按未命中处理）：%s", exc)
         return None
     if raw is None:
+        cache_operations_total.labels(result="miss").inc()
         return None
     try:
+        cache_operations_total.labels(result="hit").inc()
         return json.loads(raw)
     except json.JSONDecodeError:
         logger.warning("缓存内容不是合法 JSON，已忽略：%s", key)
@@ -90,7 +165,9 @@ def cache_set(key: str, value: Any, ttl: int) -> None:
         return
     try:
         client.set(key, json.dumps(value, ensure_ascii=False, default=str), ex=ttl)
+        cache_operations_total.labels(result="set").inc()
     except Exception as exc:
+        cache_operations_total.labels(result="error").inc()
         logger.warning("写缓存失败（忽略）：%s", exc)
 
 

@@ -5,7 +5,6 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.ai.rag import generate_stream
-from app.core.config import settings
 from app.core.database import get_db, get_session_factory
 from app.core.deps import get_optional_user
 from app.core.ratelimit import rate_limit
@@ -22,7 +21,7 @@ router = APIRouter()
 @router.post(
     "/chat",
     # AI 对话每轮都要花 LLM Token，限流既是防滥用也是控成本
-    dependencies=[Depends(rate_limit("chat", settings.rate_limit_chat))],
+    dependencies=[Depends(rate_limit("chat"))],
 )
 async def chat(
     request: ChatRequest,
