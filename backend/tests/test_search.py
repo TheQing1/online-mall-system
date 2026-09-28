@@ -181,3 +181,18 @@ def test_explicit_sort_is_respected(client, db):
     names, _total = _search(client, "手机", sort_by="price", sort_order="asc")
 
     assert names == ["华为 Mate 60 Pro", "iPhone 15 Pro Max"]
+
+
+def test_ai_fallback_uses_the_same_search_logic(db):
+    """AI 客服的商品兜底（知识库没命中时推商品卡片）与列表搜索共用一套分词逻辑。
+
+    这条路径没有接口层断言，回归了只会表现为「AI 不推商品了」，很隐蔽。
+    """
+    from app.services import product_service
+
+    _seed_catalog(db)
+
+    hits = product_service.search_products(db, "华为手机", limit=5)
+    assert [product.name for product in hits] == ["华为 Mate 60 Pro"]
+    # 同义词同样生效
+    assert [p.name for p in product_service.search_products(db, "苹果", limit=5)]
