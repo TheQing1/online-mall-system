@@ -45,8 +45,8 @@ jobs:
   # 这一批用例在别处会「因为连不上 MySQL 而自动 skip」——那等于什么都没验证。
   # 所以单独开一个带 MySQL service 的 job，把 README 里「8 线程抢 3 件库存
   # 恰好成交 3 单」「5 次并发支付恰好成功 1 次」变成每次提交都能复现的证据。
-  mysql-integration:
-    name: 真实 MySQL/InnoDB 集成测试
+  infra-integration:
+    name: 真实 MySQL + Redis 集成测试
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -65,6 +65,15 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=10
 
     env:
       MYSQL_HOST: 127.0.0.1
@@ -72,6 +81,8 @@ jobs:
       MYSQL_USER: root
       MYSQL_PASSWORD: ci_root_password
       MYSQL_DATABASE: online_mall
+      # 用独立的 db index，避免和别人的用途混在一起
+      TEST_REDIS_URL: redis://127.0.0.1:6379/9
 
     steps:
       - uses: actions/checkout@v4
@@ -89,14 +100,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
-      # 这些用例连不上 MySQL 时会 skip 而不是失败，所以必须显式断言「真的跑了」，
+      # 这些用例连不上 MySQL/Redis 时会 skip 而不是失败，所以必须显式断言「真的跑了」，
       # 否则配置写错（host/口令）时会得到一个绿色的假通过。
-      - name: 并发防超卖 / 支付幂等 / 外键（skip 即视为失败）
+      - name: 并发防超卖 / 支付幂等 / 缓存 / 限流 / 分布式锁（skip 即视为失败）
         run: |
           set -o pipefail
-          pytest -m mysql -v | tee /tmp/mysql-integration.log
-          if grep -q "skipped" /tmp/mysql-integration.log; then
-            echo "::error::MySQL 集成用例被 skip，这一步没有验证任何东西"
+          pytest -m "mysql or redis" -v | tee /tmp/infra-integration.log
+          if grep -q "skipped" /tmp/infra-integration.log; then
+            echo "::error::集成用例被 skip，这一步没有验证任何东西（检查 MySQL / Redis 配置）"
             exit 1
           fi
 

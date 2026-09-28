@@ -19,5 +19,12 @@ chromadb==1.5.9
 # 混合检索：jieba 做中文分词，rank_bm25 做词频召回（见 app/ai/retriever.py）
 jieba==0.42.1
 rank-bm25==0.2.2
+# 缓存 / 限流 / 分布式锁（Redis 不可用时自动降级，见 app/core/cache.py）
+redis==8.1.0
+# 可观测性：指标自己实现（见 app/core/metrics.py），只依赖 prometheus_client
+prometheus-client==0.26.0
+# FastAPI 0.115 的约束是 starlette>=0.37.2,<0.39.0；显式钉住避免被别的包
+# 顺手升到 1.x（升上去 Router 会少掉 on_startup 参数，应用直接起不来）
+starlette==0.38.6
 python-dotenv==1.0.1
 aiofiles==24.1.0

@@ -9,6 +9,8 @@ from sqlalchemy.orm import sessionmaker
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import models  # noqa: E402,F401
+from app.core.cache import reset_client  # noqa: E402
+from app.core.config import settings  # noqa: E402
 from app.core.database import get_db, get_session_factory  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.main import app  # noqa: E402
@@ -16,6 +18,26 @@ from app.models.base import Base  # noqa: E402
 from app.models.product import Product, ProductStatus  # noqa: E402
 from app.models.sku import ProductSku  # noqa: E402
 from app.models.user import Address, User, UserRole  # noqa: E402
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_redis():
+    """默认用例不依赖 Redis：显式把它指向一个必然连不上的端口。
+
+    两个原因：
+    1. 每个用例用的是独立 SQLite 库，而 Redis 是全局的——如果本机正好跑着 Redis，
+       缓存会跨用例互相污染，出现「单跑通过、全跑失败」这种最难查的 flaky；
+    2. 顺带让整套测试覆盖「Redis 不可用时业务照常」这条降级路径。
+
+    真正验证缓存/限流/分布式锁的用例在 ``tests/test_redis_features.py``，
+    用 ``pytest -m redis`` 单独跑。
+    """
+    original = settings.redis_url
+    settings.redis_url = "redis://127.0.0.1:1/0"
+    reset_client()
+    yield
+    settings.redis_url = original
+    reset_client()
 
 
 @pytest.fixture()

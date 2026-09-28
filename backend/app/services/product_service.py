@@ -1,3 +1,4 @@
+import hashlib
 from typing import Optional, List
 
 from sqlalchemy.orm import Session
@@ -5,8 +6,38 @@ from sqlalchemy import or_
 from sqlalchemy.orm import selectinload
 from fastapi import HTTPException
 
+from app.core.cache import cache_delete, cache_delete_prefix, cache_get, cache_set
+from app.core.config import settings
 from app.models.product import Product, Category, ProductStatus
 from app.models.sku import ProductSku
+from app.schemas.product import CategoryOut, ProductOut
+
+# --- 缓存键 ---
+# 列表缓存按「查询参数哈希」区分，键会越攒越多，所以失效时按前缀整体清掉
+_PRODUCT_DETAIL_PREFIX = "product:detail:"
+_PRODUCT_LIST_PREFIX = "product:list:"
+_CATEGORY_KEY = "product:categories"
+
+
+def invalidate_product_cache(product_id: Optional[int] = None) -> None:
+    """商品或分类变动后清缓存。
+
+    详情按 id 精确删；列表与分类直接按前缀整体清——列表的组合（分页 × 关键词 ×
+    排序）太多，逐个追踪既费劲又容易漏，而这个规模的缓存重建成本极低。
+    """
+    if product_id is not None:
+        cache_delete(f"{_PRODUCT_DETAIL_PREFIX}{product_id}")
+    cache_delete_prefix(_PRODUCT_LIST_PREFIX)
+    cache_delete(_CATEGORY_KEY)
+
+
+def _to_json(model) -> dict:
+    """Pydantic 模型 → JSON 安全的 dict。
+
+    统一走 ``mode="json"``：Decimal 会变成字符串，与响应序列化的结果一致，
+    因此「缓存命中」与「缓存未命中」返回的结构完全相同，不会出现类型漂移。
+    """
+    return model.model_dump(mode="json")
 
 
 def _apply_skus(
@@ -74,7 +105,19 @@ def get_products(
     sort_by: str = "created_at",
     sort_order: str = "desc",
 ):
-    """公开商品列表（仅上架），支持搜索、分类筛选、排序、分页。"""
+    """公开商品列表（仅上架），支持搜索、分类筛选、排序、分页。
+
+    结果按查询参数缓存 ``CACHE_PRODUCT_TTL`` 秒。库存/销量在这里可能短暂陈旧，
+    这是有意的取舍：下单路径用条件 UPDATE 在事务里再校验一次库存，
+    真正保证不超卖；展示层为了抗热点读，接受秒级的陈旧。
+    """
+    cache_key = _PRODUCT_LIST_PREFIX + hashlib.sha1(
+        f"{page}|{page_size}|{keyword}|{category_id}|{sort_by}|{sort_order}".encode()
+    ).hexdigest()[:16]
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     query = (
         db.query(Product)
         .options(selectinload(Product.skus), selectinload(Product.category))
@@ -115,31 +158,49 @@ def get_products(
         if item.category:
             item.category_name = item.category.name
 
-    return {
-        "items": items,
+    payload = {
+        "items": [_to_json(ProductOut.model_validate(item)) for item in items],
         "total": total,
         "page": page,
         "page_size": page_size,
     }
+    cache_set(cache_key, payload, settings.cache_product_ttl)
+    return payload
 
 
-def get_product(db: Session, product_id: int) -> Optional[Product]:
-    """商品详情（仅上架）。"""
-    return (
+def get_product(db: Session, product_id: int) -> Optional[dict]:
+    """商品详情（仅上架），带缓存。"""
+    cache_key = f"{_PRODUCT_DETAIL_PREFIX}{product_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    product = (
         db.query(Product)
         .options(selectinload(Product.skus))
         .filter(Product.id == product_id, Product.status == ProductStatus.ON)
         .first()
     )
+    if product is None:
+        return None
+    payload = _to_json(ProductOut.model_validate(product))
+    cache_set(cache_key, payload, settings.cache_product_ttl)
+    return payload
 
 
 def get_categories(db: Session):
-    """分类树（两级）。"""
+    """分类树（两级），带缓存。"""
+    cached = cache_get(_CATEGORY_KEY)
+    if cached is not None:
+        return cached
+
     categories = db.query(Category).order_by(Category.sort).all()
     root = [c for c in categories if c.parent_id is None]
     for r in root:
         r.children = [c for c in categories if c.parent_id == r.id]
-    return root
+    payload = [_to_json(CategoryOut.model_validate(c)) for c in root]
+    cache_set(_CATEGORY_KEY, payload, settings.cache_product_ttl)
+    return payload
 
 
 def search_products(db: Session, keyword: str, limit: int = 5):
@@ -190,6 +251,7 @@ def admin_create_product(db: Session, data: dict) -> Product:
     _sync_product_aggregates(product)
     db.commit()
     db.refresh(product)
+    invalidate_product_cache()
     return product
 
 
@@ -227,6 +289,7 @@ def admin_update_product(db: Session, product_id: int, data: dict) -> Optional[P
         _apply_skus(product, skus_data, allow_remove=not referenced)
     db.commit()
     db.refresh(product)
+    invalidate_product_cache(product.id)
     return product
 
 
@@ -260,6 +323,7 @@ def admin_delete_product(db: Session, product_id: int) -> bool:
     db.query(Favorite).filter(Favorite.product_id == product_id).delete()
     db.delete(product)
     db.commit()
+    invalidate_product_cache(product_id)
     return True
 
 
@@ -272,6 +336,7 @@ def admin_create_category(db: Session, data: dict) -> Category:
     db.add(category)
     db.commit()
     db.refresh(category)
+    invalidate_product_cache()
     return category
 
 
@@ -284,6 +349,7 @@ def admin_update_category(db: Session, category_id: int, data: dict) -> Optional
             setattr(category, key, value)
     db.commit()
     db.refresh(category)
+    invalidate_product_cache()
     return category
 
 
@@ -293,4 +359,5 @@ def admin_delete_category(db: Session, category_id: int) -> bool:
         return False
     db.delete(category)
     db.commit()
+    invalidate_product_cache()
     return True
