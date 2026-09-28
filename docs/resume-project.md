@@ -14,7 +14,7 @@
 个人项目，2026.07–2026.09）
 
 > 前后端分离的完整交易闭环（SKU 下单 → 模拟支付 → 发货 → 退款审核）＋ 基于
-> LangChain + BGE + BM25 + 交叉编码器重排的 RAG 智能客服；87 个后端测试 / 10 个
+> LangChain + BGE + BM25 + 交叉编码器重排的 RAG 智能客服；113 个后端测试 / 10 个
 > 端到端测试，Docker Compose 一键起全栈。
 
 ---
@@ -31,10 +31,11 @@
   纯向量 recall@1 84.3% → **BM25 混合检索 90.2%** → **再加交叉编码器重排 92.2%，
   recall@3 达到 100%**。评测与线上生成调用同一个 `retrieve()`，不是各写一份。
 
-- **工程质量（工程化）**：87 个 pytest 用例（覆盖率 76%）+ 10 个 Playwright 端到端用例
-  （真浏览器、断言控制台零报错）；Redis 缓存/限流/分布式锁（不可用时自动降级）；
-  request_id 结构化日志 + Prometheus 指标；GitHub Actions 四任务流水线；
-  Docker Compose 五服务一键部署（多阶段镜像、非 root、HEALTHCHECK）。
+- **工程质量（工程化）**：113 个 pytest 用例（覆盖率 77%）+ 10 个 Playwright 端到端用例
+  （真浏览器、断言控制台零报错，且已进 CI）；Redis 缓存（含击穿/穿透/雪崩三道防护）、
+  全站限流、分布式锁，Redis 不可用时自动降级；request_id 结构化日志 + Prometheus 指标 +
+  6 条告警规则 + Grafana 看板；迁移可回滚（有真实 MySQL 往返用例）；
+  GitHub Actions 五任务流水线；Docker Compose 一键部署（多阶段镜像、非 root、HEALTHCHECK）。
 
 ---
 
@@ -64,7 +65,7 @@
 | 支付幂等 | 5 次并发支付 → 恰好 1 次成功 | 同上 |
 | 检索召回 | recall@1 84.3% → 90.2% → **92.2%** | `pytest -m rag_quality -s` |
 | 尾延迟 | P99 51ms → **23ms**（开缓存） | `locust -f loadtest/locustfile.py` |
-| 测试 | 87 后端 + 10 端到端，覆盖率 76% | `pytest --cov=app` / `npm run test:e2e` |
+| 测试 | 113 后端 + 10 端到端，覆盖率 77% | `pytest --cov=app` / `npm run test:e2e` |
 | 前端体积 | dist 1579KB → **762KB** | `npm run build` |
 
 **收获**：最值钱的不是这些数字，而是四个**反直觉的结论**（下面第五节），

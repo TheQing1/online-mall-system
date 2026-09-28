@@ -3,7 +3,7 @@
 > 配套项目：基于 LangChain + RAG + DeepSeek 的 B2C 在线商城
 > 技术栈：Vue3 + Element Plus + Vite + Pinia / FastAPI + SQLAlchemy 2.0 + Pydantic v2 /
 > MySQL 8.0 / ChromaDB / LangChain 0.3.x / BGE `bge-small-zh-v1.5`（本地）/ DeepSeek / JWT + bcrypt /
-> Alembic / Docker Compose + Nginx / pytest（87 个用例，含真实 MySQL、Redis 与真实向量模型）
+> Alembic / Docker Compose + Nginx / pytest（113 个用例，含真实 MySQL、Redis 与真实向量模型）
 
 > ⚠️ **本文档的每一条回答都对照当前代码校验过。**
 > 如果你改动了实现（例如换了向量库、调整了 `k` 或阈值、加了限流），
@@ -51,7 +51,7 @@
 
 `api/` 只做参数校验、调用 service、返回结果；`services/` 承载业务规则（下单、库存扣减、状态流转、索引同步）；`models/` 是 SQLAlchemy 模型；`schemas/` 是 DTO；`core/` 放配置、DB、安全、依赖、后台任务。
 
-好处：接口薄、逻辑可复用（前台与后台共用 `order_service`）、可测试。**这也是能写出 87 个测试的前提**——业务逻辑不依赖 FastAPI 的请求对象。
+好处：接口薄、逻辑可复用（前台与后台共用 `order_service`）、可测试。**这也是能写出 113 个测试的前提**——业务逻辑不依赖 FastAPI 的请求对象。
 
 ### 5. 你的具体贡献
 
@@ -425,7 +425,7 @@ WebSocket 需要协议升级、连接池、心跳保活、断线重连，复杂�
 
 ## 七、测试、CI 与部署
 
-### 38. 测试怎么做的（87 个用例）
+### 38. 测试怎么做的（113 个用例）
 
 | 文件 | 覆盖 |
 |---|---|
@@ -441,7 +441,7 @@ WebSocket 需要协议升级、连接池、心跳保活、断线重连，复杂�
 | `test_mysql_integration.py` | **真实 MySQL/InnoDB**：外键、并发防超卖、并发支付幂等（连不上时自动 skip） |
 | `test_redis_features.py` | **真实 Redis**：缓存读写与失效、限流 429、分布式锁互斥（连不上时自动 skip） |
 
-工程要点：默认 76 个用例完全自包含——每个用例一个独立 SQLite 文件、覆盖 `get_db` 依赖、
+工程要点：默认 96 个用例完全自包含——每个用例一个独立 SQLite 文件、覆盖 `get_db` 依赖、
 假 Embedding（确定性哈希向量），**不需要 MySQL 也不需要联网**，所以 CI 跑得很快。
 需要真实数据库/模型的用例用 marker 标注并自动 skip，不会让 CI 变红。
 
@@ -471,7 +471,7 @@ WebSocket 需要协议升级、连接池、心跳保活、断线重连，复杂�
 
 ### 39. CI 做了什么
 
-GitHub Actions，四个 job：
+GitHub Actions，五个 job：
 
 - **backend**：`ruff check` → `pytest --cov=app --cov-fail-under=70`（覆盖率是门槛，不是装饰）
   → `python -c "from app.main import app"` 冒烟（确认应用能正常导入）；
@@ -483,8 +483,12 @@ GitHub Actions，四个 job：
 - **rag-quality**：**手动触发**（`workflow_dispatch`）才跑 `pytest -m rag_quality`。
   它要下载约 100MB 的 BGE 模型，放进每次 push 的流水线会又慢又容易因网络抖动变红；
 - **frontend**：`frontend` / `admin` 矩阵，`npm ci` + `npm run lint` + `vite build`。
+- **e2e**：起 MySQL + Redis + API + 两个前端，再跑 10 个 Playwright 用例。这条原来
+  只在我本地手动跑，等于没在保护仓库；现在每次 push 都会真开一个浏览器点一遍。
+  它用 `RATE_LIMIT_API=0` 关掉全站限流、`SEED_SKIP_VECTOR=1` 跳过 100MB 模型下载，
+  两个都是为了「别把被测对象本身的保护机制和重量算进 E2E」。
 
-因为默认那 76 个用例跑在 SQLite + 假向量上，backend job **不需要 MySQL、也不下载
+因为默认那 96 个用例跑在 SQLite + 假向量上，backend job **不需要 MySQL、也不下载
 100MB 模型**，所以跑得很快；需要真实数据库/模型的用例各自由上面两个独立 job 负责。
 
 ruff 刻意只开 `F`（如 F821 undefined-name）和 `E9`：**只拦「一定是 bug」的规则、不引风格
@@ -555,7 +559,7 @@ Nginx 关键配置：`/api/` 反代 `proxy_buffering off` + `proxy_cache off`（
   且评测跑的是生产同一条代码路径；另有四个实测得出的负向结论（BGE 前缀有害、
   BM25Okapi 的 IDF 会变负、模型缓存命名撞车、简单评测集会虚高分数）；
 - **并发正确性经过真实数据库验证**：8 线程抢 3 件恰好成交 3 单、5 次并发支付恰好成功 1 次，失败原因被严格限定为业务错误；
-- **工程化**：分层架构、依赖注入、Alembic 幂等迁移（含可用的 downgrade）、多阶段非 root 镜像、Compose + Nginx、87 个测试（覆盖率 76%）、CI；
+- **工程化**：分层架构、依赖注入、Alembic 幂等迁移（可回滚）、多阶段非 root 镜像、Compose + Nginx、113 个测试（覆盖率 77%）、CI；
 - **清楚边界**：知道上线还差什么、瓶颈在哪、怎么扩展。
 
 ### 45. 如果流量上来先瓶颈在哪
@@ -672,3 +676,62 @@ API 进程用 `RUN_BACKGROUND_TASKS=false` 关掉它，所以 backend 可以放�
 > 一个 Windows 上的坑：locust 会读 `pyproject.toml` 当配置文件，而 Windows 默认
 > 用 GBK 解码，遇到里面的中文直接报 `'gbk' codec can't decode byte`。
 > 设 `PYTHONUTF8=1` 即可（Linux/CI 不受影响）。
+
+---
+
+## 十、缓存防护、可观测性与迁移回滚
+
+### 51. 缓存那三个经典问题，分别怎么防的
+
+一个入口函数 `cache_get_or_load(key, ttl, loader)`，三个问题各有对策：
+
+| 问题 | 现象 | 做法 |
+|---|---|---|
+| **击穿** | 热点 key 一过期，N 个请求同时未命中、同时查库 | **按 key 的进程内锁做单飞**：只有一个请求去加载，其余等它填好缓存后直接读 |
+| **穿透** | 查一个不存在的 id（或有人拿随机 id 刷），每次都绕过缓存打到库 | `loader` 返回 None 时写一条 **30 秒负缓存**（内部用哨兵字符串，对调用方仍然是 None） |
+| **雪崩** | 同一批写入的 key 在同一秒集体过期 | **TTL 抖动 ±10%**，把过期时间打散 |
+
+实测：并发用例让 10 个线程同时冲同一个热点 key，断言加载器**只被调用 1 次**；
+穿透用例连续查同一个不存在的 id 5 次，断言只查库 1 次。
+
+**边界要说清楚**：单飞是进程内的，多副本部署时每个副本仍可能各查一次
+（要彻底解决得用分布式锁 + 短等待）；Redis 不可用时这里退化为「每次都查库」，
+也就是回到没有缓存的样子——不会更差，但也不会更好。
+
+### 52. 可观测性做到了哪一步
+
+不是「加了几个日志」，而是**能回答三个问题**：
+
+1. **它还好吗**：`http_requests_total{status}`、P99 直方图、`redis_up`；
+2. **缓存/限流有没有在起作用**：`cache_operations_total{result}`（命中/未命中/负缓存）、
+   `rate_limit_blocked_total{scope}`；限流拦截激增既可能是有人在刷，也可能是配额配紧了误伤；
+3. **后台任务有没有偷偷挂**：`background_task_runs_total{task,result}`——关单失败会直接
+   导致库存不回补，这种问题不该靠用户投诉才发现。
+
+配上 6 条告警规则（5xx 比例 / P99 / Redis 降级 / 限流激增 / 定时任务失败 / 十分钟没流量）
+和一块自动导入的 Grafana 看板，用 `docker compose --profile observability up -d` 起。
+
+两个细节值得讲：指标标签用**路由模板**而不是原始路径（否则每个商品 id 都是一条时间序列，
+label 基数会炸）；指标是自己用 `prometheus_client` 写的（`prometheus-fastapi-instrumentator`
+8.x 要求 `starlette>=1.0`，和本项目锁的 FastAPI 0.115 冲突），顺便复用了访问日志里
+已经算好的耗时——**计时只做一次，两个消费者**。
+
+**边界**：规则写好了但没接通知渠道；没有长期存储与容量规划。
+
+### 53. 数据库迁移能回滚吗（一个很容易被问住的点）
+
+原来这个迁移的 `downgrade()` 是 `pass`——命令成功退出、什么都没回滚，属于
+「看起来安全、真出事时才发现回不去」。现在是真的，而且有真实 MySQL 的
+`upgrade → downgrade base → upgrade` 往返用例守着。
+
+做对它的过程中在 InnoDB 上踩了两个细节（都是跑用例才发现的）：
+
+1. **列还被外键引用时不能 `DROP COLUMN`**（报 1828），必须先删外键约束；
+2. **唯一索引如果同时是另一个外键的支撑索引，就不能直接删**（报 1553）——
+   `cart_items` 的 `uq_cart_user_sku(user_id, sku_id)` 正好是 `user_id` 外键的支撑索引，
+   必须先补一个普通的 `(user_id)` 索引，才能删它。
+
+还有两个决策：**先删列、再删表**（`order_items.sku_id` 有指向 `product_skus` 的外键）；
+**只回滚 V2 新增的结构，保留基础表**——`upgrade` 里那些表是「缺了才建」，
+根本分不清是 V1 带来的还是这次迁移建的，**宁可少删**（多留一张空表不会出事，删错一张表就是事故）。
+数据本身不可恢复，所以生产回滚前必须先备份。
