@@ -37,14 +37,35 @@ test('商品详情能选规格并加入购物车', async ({ page }) => {
   expectCleanConsole(problems)
 })
 
-test('搜索页能按关键词过滤', async ({ page }) => {
+test('搜索页能按关键词过滤（含分词与多词组合）', async ({ page }) => {
   const problems = watchConsole(page)
 
-  await page.goto('/search?keyword=手机')
+  // 注意参数名是 q：Navbar 的搜索框 push 的就是 { q: ... }，
+  // 早先这条用例写成 ?keyword= 也能过——因为参数被忽略、页面列出全部商品，
+  // 「至少有一张卡片可见」于是永远成立。这种「假通过」比失败更危险。
+  await page.goto('/search?q=华为手机')
   await settle(page)
 
-  await expect(page.locator('.el-card').first()).toBeVisible()
+  await expect(page.getByText('搜索: "华为手机"')).toBeVisible()
+  const names = page.locator('.product-name')
+  await expect(names).toHaveCount(1)
+  await expect(names.first()).toHaveText('华为 Mate 60 Pro')
+
+  // 多词组合不该把不相关商品带出来
+  await expect(page.getByText('iPhone 15 Pro Max')).toHaveCount(0)
+
   await page.screenshot({ path: `${SHOTS}/mall-search.png` })
+  expectCleanConsole(problems)
+})
+
+test('搜索支持中文别名（搜「苹果」能找到 iPhone）', async ({ page }) => {
+  const problems = watchConsole(page)
+
+  await page.goto('/search?q=苹果')
+  await settle(page)
+
+  const names = page.locator('.product-name')
+  await expect(names.filter({ hasText: 'iPhone 15 Pro Max' })).toHaveCount(1)
   expectCleanConsole(problems)
 })
 
