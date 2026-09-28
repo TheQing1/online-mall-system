@@ -168,3 +168,121 @@ jobs:
       - name: 构建
         working-directory: ${{ matrix.app }}
         run: npm run build
+
+  # 端到端冒烟：真浏览器打开真页面。
+  #
+  # 单独一个 job 而不是塞进 frontend：它需要完整栈（MySQL + Redis + API + 两个前端），
+  # 而 frontend 那个 job 只关心「能不能 lint 和构建」。
+  e2e:
+    name: 端到端冒烟（Playwright）
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_password
+          MYSQL_DATABASE: online_mall
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci_root_password"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=10
+
+    env:
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: "3306"
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ci_root_password
+      MYSQL_DATABASE: online_mall
+      REDIS_URL: redis://127.0.0.1:6379/0
+      # E2E 一轮要发几十个请求、登录 3 次：把配额抬高，否则量到的是限流器。
+      # 限流本身有专门的用例（infra-integration 里跑）。
+      RATE_LIMIT_API: "0"
+      RATE_LIMIT_LOGIN: "1000"
+      # 种子数据里同步向量索引会去下 100MB 的 BGE 模型；E2E 用不到知识库，跳过
+      SEED_SKIP_VECTOR: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: 安装后端依赖
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: 准备数据库（迁移 + 种子数据）
+        working-directory: backend
+        run: |
+          alembic upgrade head
+          python -m app.core.seed
+
+      - name: 启动后端
+        working-directory: backend
+        run: |
+          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 \
+            > /tmp/backend.log 2>&1 &
+          for _ in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8000/health > /dev/null; then break; fi
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:8000/api/v1/products > /dev/null
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            admin/package-lock.json
+
+      - name: 安装前端依赖
+        run: |
+          npm ci --prefix frontend
+          npm ci --prefix admin
+
+      - name: 安装 Playwright 浏览器
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: 启动商城与后台
+        run: |
+          nohup npm run dev --prefix frontend > /tmp/frontend.log 2>&1 &
+          nohup npm run dev --prefix admin > /tmp/admin.log 2>&1 &
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:5173/ > /dev/null \
+              && curl -sf http://localhost:5174/admin/ > /dev/null; then break; fi
+            sleep 2
+          done
+
+      - name: 端到端测试
+        working-directory: frontend
+        run: npm run test:e2e
+
+      # 失败时把三份日志打出来，否则只能看到 Playwright 的断言
+      - name: 失败时输出服务日志
+        if: failure()
+        run: |
+          echo "===== backend ====="; tail -n 60 /tmp/backend.log || true
+          echo "===== frontend ====="; tail -n 30 /tmp/frontend.log || true
+          echo "===== admin ====="; tail -n 30 /tmp/admin.log || true
