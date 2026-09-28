@@ -1,6 +1,9 @@
 import math
 
+from langchain_core.documents import Document
+
 from app.ai import indexer, vectorstore
+from app.core.config import settings
 from app.models.knowledge import KnowledgeCategory, KnowledgeDoc
 
 from tests.conftest import auth_header
@@ -130,3 +133,83 @@ def test_bm25_index_refreshes_after_knowledge_update(db, tmp_path, monkeypatch):
     assert all("暂不支持" not in document.page_content for document, _score in hits), (
         "BM25 索引没跟上更新，仍然召回旧内容"
     )
+
+
+# --- 交叉编码器重排 ---
+
+
+def _three_docs():
+    return [
+        Document(page_content=title, metadata={"title": title})
+        for title in ("甲", "乙", "丙")
+    ]
+
+
+class _StubReranker:
+    """桩重排模型：把「丙」判成最相关，其余判成不相关，且顺序稳定。"""
+
+    def predict(self, pairs):
+        return [10.0 if content == "丙" else -10.0 for _query, content in pairs]
+
+
+def test_rerank_sorts_by_model_score(monkeypatch):
+    """重排要把最相关的片段顶到第一位，并把 logit 压到 0~1。"""
+    from app.ai import reranker
+
+    docs = _three_docs()
+    candidates = [(docs[0], 0.9), (docs[1], 0.8), (docs[2], 0.7)]
+    monkeypatch.setattr(reranker, "_reranker", _StubReranker())
+
+    result = reranker.rerank("随便问问", candidates, top_k=3)
+
+    assert [document.metadata["title"] for document, _score in result] == [
+        "丙",
+        "甲",
+        "乙",
+    ]
+    assert result[0][1] > 0.99
+    assert result[1][1] < 0.01
+
+
+def test_rerank_degrades_to_recall_order_when_model_unavailable(monkeypatch):
+    """重排只是增强：模型拉不起来时必须退回召回顺序，不能把客服打挂。"""
+    from app.ai import reranker
+
+    docs = _three_docs()
+    candidates = [(docs[0], 0.9), (docs[1], 0.8), (docs[2], 0.7)]
+
+    def unreachable():
+        raise RuntimeError("模型下载失败")
+
+    monkeypatch.setattr(reranker, "_reranker", None)
+    monkeypatch.setattr(reranker, "_load_failed", False)
+    monkeypatch.setattr(reranker, "get_reranker", unreachable)
+
+    result = reranker.rerank("随便问问", candidates, top_k=2)
+
+    assert result == candidates[:2]
+
+
+def test_retrieve_applies_rerank_only_when_enabled(monkeypatch):
+    """开关关闭时不加载重排模型；开启后顺序由重排模型决定。"""
+    from app.ai import reranker, retriever
+
+    docs = _three_docs()
+    monkeypatch.setattr(
+        retriever,
+        "search_similar",
+        lambda query, k: [(docs[0], 0.1), (docs[1], 0.2), (docs[2], 0.3)],
+    )
+    # 关闭重排：按向量相似度排序（距离越小越靠前）
+    monkeypatch.setattr(settings, "rag_retrieval_mode", "vector")
+    monkeypatch.setattr(settings, "rag_rerank_enabled", False)
+    assert [
+        document.metadata["title"] for document, _score in retriever.retrieve("q", k=3)
+    ] == ["甲", "乙", "丙"]
+
+    # 开启重排：把原本排最后的「丙」顶上来
+    monkeypatch.setattr(reranker, "_reranker", _StubReranker())
+    monkeypatch.setattr(settings, "rag_rerank_enabled", True)
+    assert [
+        document.metadata["title"] for document, _score in retriever.retrieve("q", k=3)
+    ] == ["丙", "甲", "乙"]
