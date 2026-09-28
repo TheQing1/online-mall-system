@@ -3,7 +3,7 @@
 > 配套项目：基于 LangChain + RAG + DeepSeek 的 B2C 在线商城
 > 技术栈：Vue3 + Element Plus + Vite + Pinia / FastAPI + SQLAlchemy 2.0 + Pydantic v2 /
 > MySQL 8.0 / ChromaDB / LangChain 0.3.x / BGE `bge-small-zh-v1.5`（本地）/ DeepSeek / JWT + bcrypt /
-> Alembic / Docker Compose + Nginx / pytest（74 个用例，含真实 MySQL、Redis 与真实向量模型）
+> Alembic / Docker Compose + Nginx / pytest（75 个用例，含真实 MySQL、Redis 与真实向量模型）
 
 > ⚠️ **本文档的每一条回答都对照当前代码校验过。**
 > 如果你改动了实现（例如换了向量库、调整了 `k` 或阈值、加了限流），
@@ -51,7 +51,7 @@
 
 `api/` 只做参数校验、调用 service、返回结果；`services/` 承载业务规则（下单、库存扣减、状态流转、索引同步）；`models/` 是 SQLAlchemy 模型；`schemas/` 是 DTO；`core/` 放配置、DB、安全、依赖、后台任务。
 
-好处：接口薄、逻辑可复用（前台与后台共用 `order_service`）、可测试。**这也是能写出 74 个测试的前提**——业务逻辑不依赖 FastAPI 的请求对象。
+好处：接口薄、逻辑可复用（前台与后台共用 `order_service`）、可测试。**这也是能写出 75 个测试的前提**——业务逻辑不依赖 FastAPI 的请求对象。
 
 ### 5. 你的具体贡献
 
@@ -419,7 +419,7 @@ WebSocket 需要协议升级、连接池、心跳保活、断线重连，复杂�
 
 ## 七、测试、CI 与部署
 
-### 38. 测试怎么做的（74 个用例）
+### 38. 测试怎么做的（75 个用例）
 
 | 文件 | 覆盖 |
 |---|---|
@@ -435,7 +435,7 @@ WebSocket 需要协议升级、连接池、心跳保活、断线重连，复杂�
 | `test_mysql_integration.py` | **真实 MySQL/InnoDB**：外键、并发防超卖、并发支付幂等（连不上时自动 skip） |
 | `test_redis_features.py` | **真实 Redis**：缓存读写与失效、限流 429、分布式锁互斥（连不上时自动 skip） |
 
-工程要点：默认 63 个用例完全自包含——每个用例一个独立 SQLite 文件、覆盖 `get_db` 依赖、
+工程要点：默认 64 个用例完全自包含——每个用例一个独立 SQLite 文件、覆盖 `get_db` 依赖、
 假 Embedding（确定性哈希向量），**不需要 MySQL 也不需要联网**，所以 CI 跑得很快。
 需要真实数据库/模型的用例用 marker 标注并自动 skip，不会让 CI 变红。
 
@@ -478,7 +478,7 @@ GitHub Actions，四个 job：
   它要下载约 100MB 的 BGE 模型，放进每次 push 的流水线会又慢又容易因网络抖动变红；
 - **frontend**：`frontend` / `admin` 矩阵，`npm ci` + `npm run lint` + `vite build`。
 
-因为默认那 63 个用例跑在 SQLite + 假向量上，backend job **不需要 MySQL、也不下载
+因为默认那 64 个用例跑在 SQLite + 假向量上，backend job **不需要 MySQL、也不下载
 100MB 模型**，所以跑得很快；需要真实数据库/模型的用例各自由上面两个独立 job 负责。
 
 ruff 刻意只开 `F`（如 F821 undefined-name）和 `E9`：**只拦「一定是 bug」的规则、不引风格
@@ -549,7 +549,7 @@ Nginx 关键配置：`/api/` 反代 `proxy_buffering off` + `proxy_cache off`（
   且评测跑的是生产同一条代码路径；另有四个实测得出的负向结论（BGE 前缀有害、
   BM25Okapi 的 IDF 会变负、模型缓存命名撞车、简单评测集会虚高分数）；
 - **并发正确性经过真实数据库验证**：8 线程抢 3 件恰好成交 3 单、5 次并发支付恰好成功 1 次，失败原因被严格限定为业务错误；
-- **工程化**：分层架构、依赖注入、Alembic 幂等迁移（含可用的 downgrade）、多阶段非 root 镜像、Compose + Nginx、74 个测试（覆盖率 72%）、CI；
+- **工程化**：分层架构、依赖注入、Alembic 幂等迁移（含可用的 downgrade）、多阶段非 root 镜像、Compose + Nginx、75 个测试（覆盖率 72%）、CI；
 - **清楚边界**：知道上线还差什么、瓶颈在哪、怎么扩展。
 
 ### 45. 如果流量上来先瓶颈在哪
