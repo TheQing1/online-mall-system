@@ -1,9 +1,10 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import ElementPlus from 'element-plus'
-import 'element-plus/dist/index.css'
-import zhCn from 'element-plus/es/locale/lang/zh-cn'
-import * as ElementPlusIconsVue from '@element-plus/icons-vue'
+
+// 服务式组件（能用 JS 直接调的那些）不走模板解析，按需引入插件管不到它们，
+// 所以样式要在这里显式引一次。用组件的 style 入口而不是裸 theme-chalk 文件，
+// 是因为它会连带把它依赖的样式（overlay 等）一起引进来。
+import 'element-plus/es/components/message/style/css'
 
 import App from './App.vue'
 import router from './router'
@@ -11,11 +12,5 @@ import router from './router'
 const app = createApp(App)
 app.use(createPinia())
 app.use(router)
-app.use(ElementPlus, { locale: zhCn })
-
-// 全局注册 Element Plus 图标
-for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
-  app.component(key, component)
-}
 
 app.mount('#app')

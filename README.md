@@ -20,7 +20,9 @@
   纯向量 recall@1 84.3% → **BM25 混合检索 90.2%** → **再加交叉编码器重排 92.2%，
   且 recall@3 达到 100%**（进 Prompt 的就是 top-3）；
 - **工程化**：Alembic 幂等迁移（含可用的 downgrade）、64 个 pytest 用例（覆盖率 71%）、
-  GitHub Actions CI、Docker Compose 一键部署（多阶段镜像 + 非 root + HEALTHCHECK）。
+  **9 个 Playwright 端到端用例**（真浏览器 + 控制台零报错 + 样式生效断言）、
+  GitHub Actions CI、Docker Compose 一键部署（多阶段镜像 + 非 root + HEALTHCHECK）；
+  前端 Element Plus 按需引入，`dist` 体积减半（1579KB → 762KB）。
 - **抗读压力与防滥用**：商品读路径走 Redis 缓存（50 并发实测 **P99 51ms → 23ms**，
   中位数 8ms → 5ms）；登录/下单/AI 对话按用户或 IP 限流；关单任务用 Redis
   分布式锁串行化并拆成独立 worker，API 进程可以放心多副本；**Redis 不可用时自动降级**，
@@ -66,6 +68,23 @@
 - Banner 管理：运营位增删改、上下线、排序
 - 知识库：文档 CRUD + 批量导入 .md/.txt（增量同步向量索引）
 - RAG 评测：测试用例管理 + 一键评测召回命中率
+
+## 界面速览
+
+| 商城首页 | 商品详情（多规格 SKU） |
+|---|---|
+| ![商城首页](docs/screenshots/mall-home.png) | ![商品详情](docs/screenshots/mall-product-detail.png) |
+
+| AI 客服（多轮 + 商品卡片 + 流式输出） | 购物车 |
+|---|---|
+| ![AI 客服](docs/screenshots/mall-ai-chat.png) | ![购物车](docs/screenshots/mall-cart.png) |
+
+| 管理后台 · 数据概览 | 管理后台 · 登录 |
+|---|---|
+| ![后台看板](docs/screenshots/admin-dashboard.png) | ![后台登录](docs/screenshots/admin-login.png) |
+
+> 截图由 `npm run test:e2e` 的 Playwright 用例自动产出（见「端到端冒烟测试」一节），
+> 所以它们不会随着界面改动而过期——每次跑测试都会覆盖一遍。
 
 ## 快速开始（开发环境）
 
@@ -182,7 +201,9 @@ MAX_UPLOAD_SIZE=2097152
 
 - 重排只在 CPU 上跑（每条问题约 0.6 秒）。上生产要么换 GPU，要么换更小的
   cross-encoder；也没有做重排结果的缓存，同一个问题反复问会重复计算；
-- 前端无 TypeScript、无单元测试；商城前台的全局路由守卫已是唯一权威判断，
+- 前端无 TypeScript、无单元测试（有 9 个 Playwright 端到端冒烟测试，但没进 CI——
+  需要同时起后端、MySQL、Redis 与两个前端，成本高，目前是本地手动跑）；
+  商城前台的全局路由守卫已是唯一权威判断，
   但各页面里还留着早期手写的 `onMounted` 登录判断（现在属于冗余代码，可删）；
 - `alembic downgrade` 只有索引迁移是真实可用的；V2 那个大迁移的 `downgrade()` 仍是
   `pass`（命令成功退出但什么都不回滚），需要补齐；
@@ -231,6 +252,22 @@ pytest tests/test_regressions.py -v     # 15 个已修复缺陷的回归
 pytest -m rag_quality -s                # 真实 BGE 模型的召回率（无模型缓存时自动 skip）
 pytest -m mysql -v                      # 真实 MySQL / InnoDB 集成（连不上时自动 skip）
 ```
+
+### 端到端冒烟测试（Playwright，9 个用例）
+
+真浏览器跑真页面：首页渲染、商品详情、搜索、登录、购物车、AI 客服面板、后台登录与看板，
+并断言**控制台没有任何报错**。这个检查很值钱——组件没注册、`v-loading` 指令没注册、
+资源 404、按需引入后样式没进来（用计算样式断言）都是它抓出来的。
+
+```bash
+# 前置：后端 :8000、商城 :5173、后台 :5174 都已启动
+cd frontend && npm run test:e2e
+```
+
+> 跑 E2E 前要把后端限流配额调大：登录接口按 IP 限流（默认 **10 次/分钟**），
+> 而 E2E 每轮会登录 3 次，连续跑几轮就会自己撞上 429。
+> 这不是 bug，是限流真的在生效——测试环境的正确做法是放宽配额：
+> `RATE_LIMIT_LOGIN=1000 uvicorn app.main:app --port 8000`。
 
 覆盖范围：注册/登录/JWT、商品列表/详情/SKU、购物车库存校验（含累加上限）、
 下单 → 支付 → 发货 → 确认收货 → 退款全流程、取消回补库存、订单超时自动关单、
@@ -317,11 +354,20 @@ pytest -m mysql -v                      # 真实 MySQL / InnoDB 集成（连不�
 
 ```bash
 cd backend && ruff check .                      # 静态检查（F/E9：只拦真 bug）
-cd backend && pytest --cov=app --cov-report=term-missing   # 当前 73%，CI 门槛 70%
+cd backend && pytest --cov=app --cov-report=term-missing   # 当前 71%，CI 门槛 70%
 
 cd frontend && npm run lint && npm run build    # 两个前端都需 lint + 构建通过
 cd admin    && npm run lint && npm run build
+cd frontend && npm run test:e2e                 # 端到端冒烟（需先起三个服务）
 ```
+
+**前端产物体积**：Element Plus 改成按需引入后（`unplugin-vue-components` +
+`ElementPlusResolver`），两个前端的 `dist` 从 1579KB / 1600KB 降到 **762KB / 797KB**，
+主 chunk 从 777KB / 1167KB 降到 103KB / 517KB。
+代价是三个地方要自己处理：服务式组件（`ElMessage`/`ElMessageBox`）与指令（`v-loading`）
+不走模板解析、插件管不到，样式要显式引；中文 locale 也要从
+`app.use(ElementPlus, { locale })` 改成 `<el-config-provider>`。
+这三件事都由端到端测试守着（见上）。
 
 ESLint / Prettier 配置与依赖都已就位（`eslint.config.mjs` / `.prettierrc` +
 `devDependencies`），`npm run lint` 与 `npm run format` 直接可用，CI 里也会跑 lint。
