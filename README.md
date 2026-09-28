@@ -283,7 +283,13 @@ pytest -m mysql -v                      # 真实 MySQL / InnoDB 集成（连不�
 资源 404、按需引入后样式没进来（用计算样式断言）都是它抓出来的。
 
 ```bash
-# 前置：后端 :8000、商城 :5173、后台 :5174 都已启动
+# 1) 后端跑在 :8000（配额调大，见下面的说明）
+cd backend && RATE_LIMIT_API=0 RATE_LIMIT_LOGIN=1000 uvicorn app.main:app --port 8000
+# 2) 两个前端跑**生产产物**（与 CI 一致；dev server 的依赖预构建会在首次请求时
+#    报 504 Outdated Optimize Dep，被「控制台零报错」的断言抓成失败）
+cd frontend && npm run build && npm run preview     # http://localhost:5173
+cd admin    && npm run build && npm run preview     # http://localhost:5174/admin/
+# 3) 跑测试
 cd frontend && npm run test:e2e
 ```
 
