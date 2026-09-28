@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     # recall@3 同时最优（见 tests/test_rag_quality.py 的对比输出）。
     rag_vector_weight: float = 0.6
     rag_bm25_weight: float = 0.4
+    # 交叉编码器重排：默认关闭。开启后首次使用会下载约 1.1GB 的 bge-reranker-base，
+    # 每条问题多花约 1 秒 CPU 前向；收益见 README 的对比表。
+    rag_rerank_enabled: bool = False
+    # 送入重排的候选条数（召回阶段会多取一些，重排后再收敛到 top-k）
+    rag_rerank_candidates: int = 10
 
     # File Upload
     upload_dir: str = "static/products"

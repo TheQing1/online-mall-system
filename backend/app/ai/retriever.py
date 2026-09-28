@@ -29,6 +29,7 @@ from langchain_core.documents import Document
 from rank_bm25 import BM25Plus
 
 from app.ai.vectorstore import get_vectorstore, index_generation, search_similar
+from app.ai.reranker import rerank
 from app.core.config import settings
 
 # 纯标点/空白的分词结果不参与 BM25 统计
@@ -115,14 +116,29 @@ def retrieve(
     - ``hybrid``：得分是两路归一化分数的加权和，只在本次候选集合内可比，
       0.3 大致等于「至少有一路把它排进了前半段」。绝对质量由向量那一路
       （以及重排阶段，如果开启）来保证。
+
+    开启重排（``RAG_RERANK_ENABLED``）后，召回会多取一些候选、再由 CrossEncoder
+    收敛到 top-k，此时返回的得分是重排模型的 sigmoid 输出（0~1，0.5 相当于打平）。
     """
     mode = (mode or settings.rag_retrieval_mode).lower()
+    # 重排要从更多候选里挑，所以召回阶段先多取一点
+    want = max(k, settings.rag_rerank_candidates) if settings.rag_rerank_enabled else k
 
-    if mode != "hybrid":
-        return [
-            (doc, 1.0 - distance) for doc, distance in search_similar(query, k=k)
+    if mode == "hybrid":
+        ranked = _hybrid_search(query, want)
+    else:
+        ranked = [
+            (doc, 1.0 - distance)
+            for doc, distance in search_similar(query, k=want)
         ]
 
+    if settings.rag_rerank_enabled:
+        ranked = rerank(query, ranked[: settings.rag_rerank_candidates], k)
+    return ranked[:k]
+
+
+def _hybrid_search(query: str, k: int) -> List[Tuple[Document, float]]:
+    """向量召回 + BM25 召回，归一化后加权融合。"""
     # 两路各多取一些候选再融合：只各取 3 条的话，某一路独有的正确答案
     # 根本没机会进入融合列表。
     candidates = max(k * 4, 10)

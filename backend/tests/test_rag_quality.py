@@ -35,15 +35,30 @@ MIN_HIT_RATE = 0.85
 # 模型缓存位于 backend/data/model_cache（在 Python 包之外）
 _MODEL_CACHE = settings.data_path / "model_cache"
 
+# 必须精确到 Embedding 模型：同一个 cache 目录里还有 bge-reranker-base，
+# 用宽松的 "bge" 关键字匹配会先命中重排模型，把它当成 Embedding 用——
+# 向量召回会从 84% 直接掉到 3.9%（本项目真实踩过，见该用例的注释）。
+_EXPECTED_EMBEDDING_DIR = (
+    _MODEL_CACHE / "models" / "BAAI--bge-small-zh-v1.5" / "snapshots" / "master"
+)
+
 
 def _local_model_dir():
     """返回本地已缓存的模型目录；找不到返回 None。"""
-    if not _MODEL_CACHE.exists():
-        return None
+    if (_EXPECTED_EMBEDDING_DIR / "config.json").exists():
+        return _EXPECTED_EMBEDDING_DIR
     for candidate in _MODEL_CACHE.rglob("config.json"):
-        if "bge" in str(candidate).lower():
+        path = str(candidate).lower()
+        if "bge" in path and "reranker" not in path:
             return candidate.parent
     return None
+
+
+def _has_reranker_model() -> bool:
+    """本地是否已经缓存了重排模型（它默认不开启，所以独立判断）。"""
+    from app.ai.reranker import _MODEL_SNAPSHOT
+
+    return (_MODEL_SNAPSHOT / "config.json").exists()
 
 
 @pytest.fixture(scope="module")
@@ -92,28 +107,30 @@ def _rag_index(tmp_path_factory):
         yield embeddings
 
 
-def _evaluate(mode: str):
+def _evaluate(mode: str, rerank: bool = False):
     """跑完整评测集，返回 (recall@1, recall@k, 每条用例的命中排名, 未命中明细)。"""
     from app.ai.retriever import retrieve
 
-    top1 = hits = 0
-    ranks = []
-    misses = []
-    for question, expected_title in EVAL_CASES:
-        retrieved = retrieve(question, k=TOP_K, mode=mode)
-        titles = [
-            doc.metadata.get("title", "")
-            for doc, score in retrieved
-            if score >= settings.rag_min_relevance
-        ]
-        if expected_title in titles:
-            hits += 1
-            rank = titles.index(expected_title) + 1
-            ranks.append(rank)
-            top1 += rank == 1
-        else:
-            ranks.append(None)
-            misses.append((question, expected_title, titles))
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(settings, "rag_rerank_enabled", rerank)
+        top1 = hits = 0
+        ranks = []
+        misses = []
+        for question, expected_title in EVAL_CASES:
+            retrieved = retrieve(question, k=TOP_K, mode=mode)
+            titles = [
+                doc.metadata.get("title", "")
+                for doc, score in retrieved
+                if score >= settings.rag_min_relevance
+            ]
+            if expected_title in titles:
+                hits += 1
+                rank = titles.index(expected_title) + 1
+                ranks.append(rank)
+                top1 += rank == 1
+            else:
+                ranks.append(None)
+                misses.append((question, expected_title, titles))
     return top1, hits, ranks, misses
 
 
@@ -165,6 +182,45 @@ def test_hybrid_retrieval_is_not_worse_than_vector(_rag_index):
 
     assert hyb_hits >= vec_hits, (
         f"混合检索把召回率拉低了：vector {vec_hits}/{total} → hybrid {hyb_hits}/{total}"
+    )
+
+
+def test_rerank_improves_ranking(_rag_index):
+    """交叉编码器重排的对比：召回 10 条 → 重排 → 取 top-3。
+
+    需要本地缓存了 ``BAAI/bge-reranker-base``（约 1.1GB，默认不下载），
+    否则跳过——重排是可选项，不该让没下模型的机器跑不了测试。
+
+    断言守住的是底线：**重排不能把 recall@3 拉到纯向量之下**。
+    真正的收益看打印出来的对比表（写进 README）。
+    """
+    if not _has_reranker_model():
+        pytest.skip("本地没有重排模型缓存，跳过重排对比（RAG_RERANK_ENABLED 默认关闭）")
+
+    from app.ai import reranker
+
+    reranker._reranker = None  # 用真实模型，而不是别处塞的桩
+
+    vec_top1, vec_hits, _r1, _m1 = _evaluate("vector")
+    hyb_top1, hyb_hits, _r2, _m2 = _evaluate("hybrid")
+    rer_top1, rer_hits, _r3, rer_misses = _evaluate("hybrid", rerank=True)
+
+    total = len(EVAL_CASES)
+    print(
+        f"\n[重排对比] 文档 {len(KNOWLEDGE_DOCS)} 篇 / 用例 {total} 条 / "
+        f"召回 {settings.rag_rerank_candidates} 条 → 重排 → top-{TOP_K}"
+        f"\n  vector        : recall@1 = {vec_top1 / total:.1%}   "
+        f"recall@{TOP_K} = {vec_hits / total:.1%}"
+        f"\n  hybrid        : recall@1 = {hyb_top1 / total:.1%}   "
+        f"recall@{TOP_K} = {hyb_hits / total:.1%}"
+        f"\n  hybrid+rerank : recall@1 = {rer_top1 / total:.1%}   "
+        f"recall@{TOP_K} = {rer_hits / total:.1%}"
+    )
+    for question, expected_title, titles in rer_misses:
+        print(f"  重排后仍未命中: {question!r} 期望={expected_title} 实际召回={titles}")
+
+    assert rer_hits >= vec_hits, (
+        f"重排后反而比纯向量还差：vector {vec_hits}/{total} → hybrid+rerank {rer_hits}/{total}"
     )
 
 
