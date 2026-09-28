@@ -1,4 +1,33 @@
+# API 与 worker 共用的环境变量。用 YAML 锚点是因为这两份配置必须完全一致——
+# 复制粘贴一旦漂移（比如只在 API 上改了 Redis 地址），会变成很难查的怪问题。
+x-backend-env: &backend-env
+  MYSQL_HOST: mysql
+  MYSQL_PORT: "3306"
+  MYSQL_USER: root
+  # 与 mysql 服务同源，同样只是本地 demo 的默认口令，真实部署必须覆盖。
+  MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-mall_root_123}
+  MYSQL_DATABASE: ${MYSQL_DATABASE:-online_mall}
+  # 默认值仅用于本地 demo，真实部署必须换成强随机值，否则任何人都能伪造 JWT。
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
+  DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+  DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+  # Redis 不可用时服务会自动降级（无缓存、不限流），不会因此起不来
+  REDIS_URL: redis://redis:6379/0
+
 services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # appendonly：缓存丢了可以重建，但分布式锁与限流计数最好别丢
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   mysql:
     image: mysql:8.0
     restart: unless-stopped
@@ -28,17 +57,11 @@ services:
       dockerfile: backend/Dockerfile
     restart: unless-stopped
     environment:
-      MYSQL_HOST: mysql
-      MYSQL_PORT: "3306"
-      MYSQL_USER: root
-      # 与 mysql 服务同源，同样只是本地 demo 的默认口令，真实部署必须覆盖。
-      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-mall_root_123}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-online_mall}
-      # 默认值仅用于本地 demo，真实部署必须换成强随机值，否则任何人都能伪造 JWT。
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
-      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      <<: *backend-env
       UPLOAD_DIR: /app/static/products
+      # 定时任务交给下面的 worker 服务，API 进程不再自己跑——
+      # 这样 API 可以放心多副本，任务仍然只有一个执行者。
+      RUN_BACKGROUND_TASKS: "false"
     volumes:
       - ./backend/static/products:/app/static/products
       # 向量库与 Embedding 模型缓存。刻意放在 /app/data 而不是 app/ 包内部：
@@ -47,6 +70,8 @@ services:
       - mall-data:/app/data
     depends_on:
       mysql:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     ports:
       - "8000:8000"
@@ -65,6 +90,26 @@ services:
       retries: 3
       start_period: 90s
 
+  # 定时任务 worker：只跑订单超时关单，不对外提供服务。
+  # 与 backend 用同一个镜像，只是换个入口（python -m app.core.tasks）。
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "app.core.tasks"]
+    environment:
+      <<: *backend-env
+    volumes:
+      # 与 backend 共用向量库/模型缓存卷；worker 目前用不到，
+      # 但共用可以让将来把「知识库重建」这类活也挪进来。
+      - mall-data:/app/data
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   web:
     build:
       context: .
@@ -79,3 +124,4 @@ services:
 volumes:
   mysql-data:
   mall-data:
+  redis-data:

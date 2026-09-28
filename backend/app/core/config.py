@@ -69,6 +69,28 @@ class Settings(BaseSettings):
     upload_dir: str = "static/products"
     max_upload_size: int = 2 * 1024 * 1024  # 2MB
 
+    # --- Redis：缓存 / 限流 / 分布式锁 ---
+    redis_url: str = "redis://localhost:6379/0"
+    # 超时刻意给得很短：Redis 不可达时宁可降级，也不能把请求线程拖死
+    redis_connect_timeout: float = 0.2
+    # 商品详情/分类的缓存时长（秒）。下单路径靠条件 UPDATE 保证不超卖，
+    # 所以展示层短暂陈旧是可以接受的，见 product_service 的说明。
+    cache_product_ttl: int = 60
+
+    # --- 限流（固定窗口）---
+    rate_limit_window_seconds: int = 60
+    rate_limit_login: int = 10
+    rate_limit_order: int = 20
+    rate_limit_chat: int = 20
+
+    # --- 可观测性 ---
+    # true 时输出单行 JSON 日志（便于日志系统采集），默认人类可读
+    log_json: bool = False
+    log_slow_request_ms: int = 500
+    # 是否在 API 进程内跑定时任务。多副本部署时应设为 false，
+    # 由一个独立 worker 进程负责（见 docker-compose 的 worker 服务）
+    run_background_tasks: bool = True
+
     class Config:
         env_file = ".env"
 

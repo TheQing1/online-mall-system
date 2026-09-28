@@ -7,8 +7,11 @@ from fastapi.staticfiles import StaticFiles
 import os
 
 from app.core.config import settings, startup_problems
+from app.core.logging_config import RequestContextMiddleware, setup_logging
+from app.core.metrics import metrics_response
 from app.core.tasks import start_background_tasks
 
+setup_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -21,7 +24,13 @@ async def lifespan(app: FastAPI):
             raise RuntimeError("配置自检未通过：" + "；".join(problems))
         for problem in problems:
             logger.warning("配置自检：%s", problem)
-    async for _ in start_background_tasks(app):
+    if settings.run_background_tasks:
+        async for _ in start_background_tasks(app):
+            yield
+    else:
+        logger.info(
+            "RUN_BACKGROUND_TASKS=false：本进程不启动定时任务（由独立 worker 负责）"
+        )
         yield
 
 
@@ -35,6 +44,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 放在 CORS 之后添加 => 位于中间件栈最外层，能覆盖包括 CORS 预检在内的所有响应
+app.add_middleware(RequestContextMiddleware)
 
 # 静态文件（商品图片）
 os.makedirs(settings.upload_dir, exist_ok=True)
@@ -70,3 +82,11 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics():
+    """Prometheus 指标。只挂在后端端口上：nginx 只反代 /api、/static、/health，
+    所以它不会随站点对外暴露（生产上也应该只让监控系统访问）。
+    """
+    return metrics_response()

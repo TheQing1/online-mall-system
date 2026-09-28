@@ -19,8 +19,12 @@
   还刻意放了多组近义干扰文档）。同一套评测集、同一条线上代码路径上测出三级提升：
   纯向量 recall@1 84.3% → **BM25 混合检索 90.2%** → **再加交叉编码器重排 92.2%，
   且 recall@3 达到 100%**（进 Prompt 的就是 top-3）；
-- **工程化**：Alembic 幂等迁移（含可用的 downgrade）、57 个 pytest 用例（覆盖率 73%）、
+- **工程化**：Alembic 幂等迁移（含可用的 downgrade）、64 个 pytest 用例（覆盖率 71%）、
   GitHub Actions CI、Docker Compose 一键部署（多阶段镜像 + 非 root + HEALTHCHECK）。
+- **抗读压力与防滥用**：商品读路径走 Redis 缓存（50 并发实测 **P99 51ms → 23ms**，
+  中位数 8ms → 5ms）；登录/下单/AI 对话按用户或 IP 限流；关单任务用 Redis
+  分布式锁串行化并拆成独立 worker，API 进程可以放心多副本；**Redis 不可用时自动降级**，
+  只丢缓存和限流、不影响业务；日志带 request_id，并暴露 Prometheus `/metrics`。
 
 ## 技术栈
 
@@ -30,6 +34,8 @@
 | 管理后台 | Vue3 + Element Plus + Vite（独立入口，`/admin/` 子路径部署） |
 | 后端 API | FastAPI + SQLAlchemy 2.0 + Pydantic v2 |
 | 数据库 | MySQL 8.0（Alembic 迁移管理，14 张表） |
+| 缓存/限流/锁 | Redis 7（不可用时自动降级为无缓存、不限流，见 `app/core/cache.py`） |
+| 可观测性 | 结构化日志 + request_id + Prometheus `/metrics` |
 | 向量存储 | ChromaDB（原生客户端，本地持久化） |
 | 检索 | 向量召回 + BM25（jieba 分词）加权融合，可选交叉编码器重排，见 `app/ai/retriever.py` |
 | AI 框架 | LangChain 0.3.x（RAG：切片 → BGE Embedding → 混合检索 → 生成） |
@@ -37,7 +43,7 @@
 | 大模型 | DeepSeek（OpenAI 兼容接口，模型名 `deepseek-flash`） |
 | 认证 | JWT（python-jose + bcrypt） |
 | 部署 | Docker Compose + Nginx（多阶段构建、非 root、HEALTHCHECK、自动迁移 + 种子数据） |
-| 测试 | pytest + httpx（57 个用例：认证/订单全流程/越权/回归/RAG 召回与重排/真实 MySQL 并发） |
+| 测试 | pytest + httpx（64 个用例：认证/订单全流程/越权/回归/RAG 召回与重排/缓存与限流/真实 MySQL 并发） |
 | 质量 | ruff + pytest-cov + ESLint + Prettier + GitHub Actions |
 
 ## 功能概览
@@ -76,6 +82,10 @@ python -m app.core.seed     # 种子数据：admin/demo 账号、商品、Banner
 
 > 首次运行会自动通过 ModelScope 下载本地 Embedding 模型（约 100MB）。
 
+> **Redis 是可选的**：不启也能跑——缓存、限流、分布式锁都会自动降级
+> （见 `app/core/cache.py`），只是性能与防滥用能力打折。本地想开：
+> `docker run -d -p 6379:6379 redis:7-alpine`，或用 `.env` 里的 `REDIS_URL` 指到别处。
+
 ### 2. 启动后端
 
 ```bash
@@ -105,6 +115,10 @@ DEEPSEEK_API_KEY=sk-xxx docker compose up -d --build
 
 Web 容器会自动执行 `alembic upgrade head` → 种子数据 → 启动 API；
 Nginx 负责 `/api`、`/static` 反代与两个 SPA 静态托管。
+
+Compose 一共 5 个服务：`mysql`、`redis`、`backend`（API）、`worker`（定时任务，与 backend
+同镜像不同入口）、`web`（Nginx + 两个前端产物）。API 进程里 **不跑**定时任务
+（`RUN_BACKGROUND_TASKS=false`），所以 backend 可以放心扩到多副本。
 
 ## 默认账号
 
@@ -148,9 +162,9 @@ MAX_UPLOAD_SIZE=2097152
 │  ├─ app/services      # 业务层
 │  ├─ app/models        # SQLAlchemy 模型（14 张表）
 │  ├─ app/ai            # RAG 链路（loader/vectorstore/indexer/rag/eval_dataset）
-│  ├─ app/core          # 配置/安全/数据库/后台任务
+│  ├─ app/core          # 配置/安全/数据库/缓存/限流/锁/日志/指标/后台任务
 │  ├─ alembic           # 数据库迁移
-│  ├─ tests             # 57 个 pytest 用例
+│  ├─ tests             # 64 个 pytest 用例
 │  └─ data/             # 运行时生成：向量库 + Embedding 模型缓存（已 gitignore）
 ├─ docs/interview-qa.md # 面试问答（与代码同步维护）
 ├─ .github/workflows    # CI
@@ -172,13 +186,16 @@ MAX_UPLOAD_SIZE=2097152
   但各页面里还留着早期手写的 `onMounted` 登录判断（现在属于冗余代码，可删）；
 - `alembic downgrade` 只有索引迁移是真实可用的；V2 那个大迁移的 `downgrade()` 仍是
   `pass`（命令成功退出但什么都不回滚），需要补齐；
-- JWT 存 localStorage；无限流、无 refresh token；部署为 HTTP，无 HTTPS，
-  安全响应头已配但 HSTS 仍注释着（等 HTTPS 终结后再开）；
+- JWT 存 localStorage、无 refresh token；登录/下单/聊天已限流，但**其余接口不限流**；
+  部署为 HTTP，无 HTTPS，安全响应头已配但 HSTS 仍注释着（等 HTTPS 终结后再开）；
 - compose 把 backend 的 8000 端口直接映射到宿主机（方便用 `/docs` 调试），
   因此 entrypoint 里的 `--forwarded-allow-ips='*'` 是有折扣的信任：
   能直连 8000 的客户端可以伪造 `X-Forwarded-For`。生产应去掉该端口映射，
   或把 `*` 收紧成 nginx 所在网段；
-- 多副本部署时超时关单任务会在每个副本各跑一份，需要分布式锁；
+- 缓存是多副本共享的 Redis，但没有做本地多级缓存：Redis 挂掉的降级期内，
+  所有读请求会直接压到 MySQL（有缓存击穿的风险，生产上一般再加 singleflight 或
+  本地缓存兜底）；
+- 限流是固定窗口，窗口边界可能出现两倍突发；也没有按用户等级/接口成本做差异化配额；
 - 模型缓存首次启动需联网从 ModelScope 下载（约 100MB）；
 - 上传只校验扩展名、不校验文件魔数；商品图存本地盘，生产应上对象存储。
 
@@ -196,14 +213,14 @@ cd backend
 ../.venv/Scripts/python -m pytest
 ```
 
-**默认 49 个用例完全自包含**：无需 MySQL、无需联网——用例跑在 SQLite 上，
-向量部分使用确定性假 Embedding。CI 里额外跑 `ruff check` 与覆盖率。
+**默认 53 个用例完全自包含**：不需要 MySQL、Redis、联网——用例跑在 SQLite 上，
+向量部分使用确定性假 Embedding、重排用桩模型。CI 里额外跑 `ruff check` 与覆盖率。
 
-另外 4 个用例需要真实 MySQL（并发防超卖 + 幂等支付 + 外键 + InnoDB 校验），
-连不上时自动 skip，不会让 CI 变红：
+另外 **11 个用例需要真实基础设施**，连不上时自动 skip、不会让 CI 变红：
 
 ```bash
-cd backend && pytest -m mysql -v          # 需要本地 MySQL；会自动建/删 <库名>_test
+cd backend && pytest -m mysql -v          # 4 个：并发防超卖 / 幂等支付 / 外键 / InnoDB 校验
+cd backend && pytest -m redis -v          # 7 个：缓存读写与失效 / 限流 429 / 分布式锁互斥
 ```
 
 按模块运行：
@@ -268,6 +285,33 @@ pytest -m mysql -v                      # 真实 MySQL / InnoDB 集成（连不�
 > 评测集从 20 条扩到 51 条、文档从 10 篇扩到 22 篇并加入近义干扰文档之后，
 > 纯向量的绝对分数比早期版本低——这是评测变难的正常结果，也让「混合检索到底值不值」
 > 有了可比的数据。
+
+## 性能与压测（50 并发 / 30 秒，单 worker）
+
+`backend/loadtest/locustfile.py` 模拟逛商城的读路径（列表 → 详情 → 搜索 → 分类/Banner），
+同一套脚本分别在**开着缓存**和**关掉缓存**的实例上各跑一轮：
+
+| 指标 | 关闭 Redis 缓存 | 开启 Redis 缓存 |
+|---|---|---|
+| 总请求数 / 失败数 | 4455 / **0** | 4547 / **0** |
+| 吞吐 | 150.3 req/s | 153.3 req/s |
+| 中位数 | 8 ms | **5 ms** |
+| P95 | 25 ms | **11 ms** |
+| P99 | 51 ms | **23 ms** |
+| 最长 | 350 ms | 85 ms |
+
+**怎么读这张表**：吞吐几乎没变，但延迟（尤其尾部）几乎减半。原因是 50 并发对
+单 worker + 本地 MySQL 来说远没到瓶颈——瓶颈在 CPU 与连接池，不在数据库。
+想看出吞吐差异得压到更高并发，或者换成更重的查询。**缓存的价值在这里体现为
+延迟与尾延迟，不是吞吐**，把结论说成「缓存让 QPS 翻倍」就是不诚实的。
+
+另外两个诚实的边界：
+
+- 压测**没有包含登录与下单**：登录按 IP 限流（10 次/分钟），压测会直接撞 429，
+  那是限流器的性能而不是业务的性能；下单是有状态写路径，混在一起测没有解释力。
+  想压写路径请单独写用户类并调大限额，脚本注释里写了做法。
+- 单 worker 单机，**不代表生产容量**——它证明的是「加了这些之后没有把读路径拖慢」，
+  以及缓存确实在起作用。
 
 ## 代码质量
 

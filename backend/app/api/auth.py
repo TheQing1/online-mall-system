@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_current_user
+from app.core.ratelimit import rate_limit
 from app.core.security import create_access_token
 from app.schemas.user import UserRegister, UserLogin, TokenOut, UserOut
 from app.services import user_service
@@ -22,7 +24,13 @@ def register(data: UserRegister, db: Session = Depends(get_db)):
     }
     return {"access_token": token, "token_type": "bearer", "user": user_out}
 
-@router.post("/login", response_model=TokenOut)
+@router.post(
+    "/login",
+    response_model=TokenOut,
+    # 登录接口只能按 IP 限流（此时还没有用户身份），
+    # 用来挡撞库：正常用户不会一分钟输错 10 次密码。
+    dependencies=[Depends(rate_limit("login", settings.rate_limit_login))],
+)
 def login(data: UserLogin, db: Session = Depends(get_db)):
     """用户登录"""
     return user_service.login_user(db, data.username, data.password)
