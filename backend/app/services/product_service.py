@@ -39,6 +39,46 @@ _SEARCH_ALIASES = {
 _CJK_ONLY = re.compile(r"^[\u4e00-\u9fff]+$")
 _TERM_SPLIT = re.compile(r"[\s,，、;；/|+]+")
 
+# 中文名词常带「子/儿」后缀（鞋子、帽子、袜子），而商品文案里往往只写核心词
+# （运动鞋、鸭舌帽）。只在**严格匹配没有任何结果**时才截断后缀，理由是精度：
+# 始终截断的话，搜「电子」会顺带匹配所有含「电」的商品（电池、电视……）。
+# 刻意不剥「头」——「镜头」剥成「镜」会匹配到眼镜、镜子，过宽。
+_CJK_NOUN_SUFFIXES = ("子", "儿")
+
+# 「子」不是后缀、而是词本身的一部分的词——这类不能截断，否则精度掉得厉害。
+# 实测：没有这个例外表时，搜「电子」因为严格匹配为空而放宽成「电」，
+# 结果一次性带回充电宝、鼠标、耳机、吸尘器共 7 条。
+# 真实系统的做法是用分词平台 + 同义词库维护这类规则，这里用一份小词表兜住。
+_NO_SUFFIX_STRIP = frozenset(
+    {
+        "电子", "原子", "量子", "分子", "离子", "光子", "粒子",
+        "男子", "女子", "妻子", "孩子", "王子", "太子", "君子", "弟子", "汉子", "骗子",
+    }
+)
+
+
+def _relaxed_keyword(keyword: str) -> Optional[str]:
+    """把所有以「子/儿」结尾的中文片段去掉后缀，返回放宽后的关键词。
+
+    没有任何片段可截断时返回 None，调用方据此跳过额外的 count 查询。
+    """
+    parts: List[str] = []
+    changed = False
+    for chunk in _TERM_SPLIT.split(keyword.strip()):
+        if not chunk:
+            continue
+        if (
+            len(chunk) > 1
+            and _CJK_ONLY.match(chunk)
+            and chunk not in _NO_SUFFIX_STRIP
+            and chunk.endswith(_CJK_NOUN_SUFFIXES)
+        ):
+            parts.append(chunk[:-1])
+            changed = True
+        else:
+            parts.append(chunk)
+    return " ".join(parts) if changed else None
+
 
 def _search_terms(keyword: str) -> List[List[str]]:
     """把关键词切成「词 → 同义词组」，返回 ``[[词1及其同义词...], [词2...]]``。
@@ -127,6 +167,15 @@ def _apply_keyword_filter(query, db: Session, keyword: str):
         for term in synonyms
     )
     return query, name_hit_score
+
+
+def _on_sale_products(db: Session):
+    """在售商品的查询底座（关掉重排/过滤之前的原始查询）。"""
+    return (
+        db.query(Product)
+        .options(selectinload(Product.skus), selectinload(Product.category))
+        .filter(Product.status == ProductStatus.ON)
+    )
 
 
 def invalidate_product_cache(product_id: Optional[int] = None) -> None:
@@ -228,15 +277,21 @@ def get_products(
     if cached is not None:
         return cached
 
-    query = (
-        db.query(Product)
-        .options(selectinload(Product.skus), selectinload(Product.category))
-        .filter(Product.status == ProductStatus.ON)
-    )
+    query = _on_sale_products(db)
 
     name_hit_score = None
     if keyword:
         query, name_hit_score = _apply_keyword_filter(query, db, keyword)
+        # 严格匹配一条都没有时，才用「去掉名词后缀」的关键词再试一次：
+        # 用户搜「鞋子」，文案里写的是「运动鞋」，差的就是那个「子」。
+        # 只在关键词真的以「子/儿」结尾时才多花一次 count——绝大多数搜索不受影响。
+        relaxed = _relaxed_keyword(keyword)
+        if relaxed and query.count() == 0:
+            relaxed_query, relaxed_score = _apply_keyword_filter(
+                _on_sale_products(db), db, relaxed
+            )
+            if relaxed_query.count():
+                query, name_hit_score = relaxed_query, relaxed_score
 
     if category_id:
         sub_ids = [category_id]
