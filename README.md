@@ -146,6 +146,18 @@ Nginx 负责 `/api`、`/static` 反代与两个 SPA 静态托管。
 > `backend/.env` 是给**不用 Docker、直接在宿主机跑 uvicorn** 用的。两份不能混着抄——
 > 容器里连的是 `mysql` / `redis` 这两个服务名，不是 `localhost`。
 
+> **网络慢的时候（国内直连 Docker Hub / PyPI）**：镜像加速器只管「拉基础镜像」这一段，
+> 构建里的 pip 和 npm 下载要靠这两个参数，实测差距是几十分钟和几小时：
+>
+> ```bash
+> docker compose build \
+>   --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+>   --build-arg NPM_REGISTRY=https://registry.npmmirror.com
+> ```
+>
+> 后端的 torch + sentence-transformers 解压后接近 2GB，走官方源在国内会卡到几乎不动。
+> 不传这两个参数时行为和以前完全一致，CI 也不受影响。
+
 Compose 一共 5 个服务：`mysql`、`redis`、`backend`（API）、`worker`（定时任务，与 backend
 同镜像不同入口）、`web`（Nginx + 两个前端产物）。API 进程里 **不跑**定时任务
 （`RUN_BACKGROUND_TASKS=false`），所以 backend 可以放心扩到多副本。

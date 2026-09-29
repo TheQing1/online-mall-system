@@ -235,6 +235,25 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      # 制造「本地装过依赖」的构建环境。
+      #
+      # 本地开发是「先 npm ci，再 docker compose build」，而 CI 默认全新检出、直接构建，
+      # 所以下面这条路径 CI 本来是永远测不到的：`.dockerignore` 一旦忘了排除**嵌套**的
+      # node_modules（写成 `node_modules` 而不是 `**/node_modules`，前者只匹配根目录），
+      # 宿主机那 300MB 的包会被送进构建上下文，再被 `COPY frontend .` 覆盖掉容器里
+      # 刚装好的 Linux 版——Vite 8 用的 rolldown 带平台原生二进制，构建当场失败。
+      #
+      # 这里不下载任何东西，只放一个「假 vite」：它要是被复制进镜像，构建必然失败；
+      # 被正确排除的话，对构建毫无影响。
+      - name: 制造「宿主机会污染构建上下文」的条件
+        run: |
+          mkdir -p frontend/node_modules/.bin admin/node_modules/.bin
+          for app in frontend admin; do
+            printf '#!/bin/sh\necho "宿主机的 node_modules 被复制进了构建上下文"\nexit 1\n' \
+              > "$app/node_modules/.bin/vite"
+            chmod +x "$app/node_modules/.bin/vite"
+          done
+
       # 后端的依赖里带 sentence-transformers / torch，镜像接近 2GB；
       # 首次构建慢，之后靠 GHA 层缓存基本只重建 COPY 那几层。
       - name: 构建后端镜像

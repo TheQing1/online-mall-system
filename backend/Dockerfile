@@ -13,6 +13,13 @@ RUN apt-get update \
 
 # 依赖层：只 COPY requirements.txt，之后再改源码不会让 pip 安装层缓存失效。
 COPY backend/requirements.txt /app/requirements.txt
+
+# 国内构建时加一句会快很多：
+#   docker compose build --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+# 后端依赖里有 torch + sentence-transformers（解压后接近 2GB），走 PyPI 官方源在国内
+# 实测能慢到几十分钟甚至直接卡住。
+# 默认不设这个值时行为与以前完全一致，CI 也不需要改。
+ARG PIP_INDEX_URL
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # 源码层：放在 pip 之后，源码变更只影响这一层及其后的层。
