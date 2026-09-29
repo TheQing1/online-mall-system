@@ -5,10 +5,13 @@ import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 import path from 'path'
 
-// 同商城前台：dev 与 preview 共用代理，端到端测试跑在 preview 上
+// 同商城前台：dev 与 preview 共用代理，端到端测试跑在 preview 上。
+// API_PROXY_TARGET 可以把后端指到别的端口（容器里跑整套时用），
+// 详见 frontend/vite.config.js 的说明。
+const API_TARGET = process.env.API_PROXY_TARGET || 'http://localhost:8000'
 const proxy = {
-  '/api': { target: 'http://localhost:8000', changeOrigin: true },
-  '/static': { target: 'http://localhost:8000', changeOrigin: true }
+  '/api': { target: API_TARGET, changeOrigin: true },
+  '/static': { target: API_TARGET, changeOrigin: true }
 }
 
 export default defineConfig({

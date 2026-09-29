@@ -7,9 +7,15 @@ import path from 'path'
 
 // dev 与 preview 共用同一份代理配置：端到端测试跑在 preview（生产产物）上，
 // 如果只给 dev 配代理，测试就会因为拿不到 /api 而全挂。
+//
+// 后端地址做成可配的：默认是本机 :8000，容器里跑整套时用
+//   API_PROXY_TARGET=http://localhost:8010 npm run preview
+// 指向 compose 映射出来的端口。之前这里写死 8000，导致端到端测试只能跑在
+// 「宿主机直接起后端」这一种形态上。
+const API_TARGET = process.env.API_PROXY_TARGET || 'http://localhost:8000'
 const proxy = {
-  '/api': { target: 'http://localhost:8000', changeOrigin: true },
-  '/static': { target: 'http://localhost:8000', changeOrigin: true }
+  '/api': { target: API_TARGET, changeOrigin: true },
+  '/static': { target: API_TARGET, changeOrigin: true }
 }
 
 export default defineConfig({

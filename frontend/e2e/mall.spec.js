@@ -12,7 +12,7 @@ test('首页能渲染 Banner 与商品，且控制台干净', async ({ page }) =
   await settle(page)
 
   await expect(page).toHaveTitle(/商城|Mall/i)
-  // 商品卡片至少要出现一张（种子数据里有 17 个商品）
+  // 商品卡片至少要出现一张（种子数据里有 59 个商品 / 17 个二级分类）
   await expect(page.locator('.el-card').first()).toBeVisible()
   await expect(page.getByText('热销').first()).toBeVisible()
 
