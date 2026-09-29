@@ -526,7 +526,7 @@ Nginx 关键配置：`/api/` 反代 `proxy_buffering off` + `proxy_cache off`（
 `client_max_body_size 8m`（默认 1m 会让 2MB 的图片上传直接 413）、gzip、安全响应头
 （CSP 逐条注明放开条件）、带 hash 的 `/assets/` 长缓存。
 
-**这一节最值得主动讲的三点**（都是写着写着才发现"不这么做一定出事"）：
+**这一节最值得主动讲的六点**（都是写着写着、或者真跑一遍才发现"不这么做一定出事"）：
 
 1. **模型预热必须放在 `up -d` 之前。** 放到之后的话，第一个访问的人要替我们等
    100MB 模型下载；更麻烦的是 backend 在这期间一直是 unhealthy，而 `web` 是
@@ -543,6 +543,26 @@ Nginx 关键配置：`/api/` 反代 `proxy_buffering off` + `proxy_cache off`（
    改成命名卷后 Docker 会用镜像里的内容和**属主**初始化它，这一类问题整体消失
    （代价是镜像多了 0.5MB 种子图，上传的图也不再直接落在仓库目录里）。
    **同时给部署自检加了一条「真的传一张 1x1 PNG」**——属主这种事只有真写一次文件才知道。
+4. **torch 必须钉成 CPU 版。** 模型是强制跑 CPU 的，但不钉的话 pip 会从 PyPI 拿默认的
+   CUDA 版，顺带拖进 `nvidia-cudnn-cu13`（单个 553MB）、cublas、cufft 等合计 **3~4GB
+   完全用不到的库**，镜像从 ~1.5GB 涨到 8GB 左右——小磁盘的机器上光拉镜像就能把盘占满。
+   加一句 `--extra-index-url https://download.pytorch.org/whl/cpu` 就够了：`+cpu` 在
+   PEP 440 里大于同名版本号，pip 会优先选它（实测 `torch-2.14.0+cpu` 196MB，
+   而不是 `torch-2.14.0` 554MB + 3GB nvidia-*）。
+   **为什么 CI 一直没发现**：GitHub 的机器下载快、磁盘也大，镜像 8GB 它照样能构建成功，
+   只是慢——只有「在小带宽或小磁盘的机器上构建」才会真正卡住。
+5. **`depends_on: service_healthy` 会在慢网络下把整个部署打死。** 这条是**真跑一遍才踩到的**：
+   web 原本等 backend 健康才启动，而后端首次启动要下载 BGE 模型；下载超过 healthcheck 的
+   `start_period` 之后容器被标成 unhealthy，compose 的处理是**直接报错退出**——
+   `dependency failed to start: container ... is unhealthy`，`up -d` 失败，
+   **web 容器连创建都没创建**，站点根本不存在。改成 `service_started`：nginx 立刻托管前端，
+   后端就绪前 `/api` 返回 502，好后自动恢复。
+   教训是「不要用健康检查去表达『等一个可能很久的初始化完成』」——
+   初始化该前置（模型预热），而不是让整条依赖链去干等。
+6. **worker 与 backend 共用镜像，就继承了后端的 HTTP healthcheck。** worker 根本不跑 HTTP
+   服务，那条「请求 `/health`」对它是**永远失败**，于是 `docker compose ps` 里常年挂着一个
+   (unhealthy)，纯噪音，还容易让人以为定时任务挂了。换成对 worker 有意义的判据：
+   PID 1 确实是 `app.core.tasks` 那个进程。
 
 ### 41. 上线前还差什么（主动列出，显示清楚边界）
 
