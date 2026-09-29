@@ -155,8 +155,13 @@ Nginx 负责 `/api`、`/static` 反代与两个 SPA 静态托管。
 >   --build-arg NPM_REGISTRY=https://registry.npmmirror.com
 > ```
 >
-> 后端的 torch + sentence-transformers 解压后接近 2GB，走官方源在国内会卡到几乎不动。
-> 不传这两个参数时行为和以前完全一致，CI 也不受影响。
+> 后端的依赖带 torch 和 sentence-transformers。torch 已经在 `backend/requirements.txt`
+> 里钉成 **CPU 版**（`--extra-index-url https://download.pytorch.org/whl/cpu`）——
+> 模型本来就强制跑 CPU（`app/ai/vectorstore.py` 里 `device="cpu"`），不钉的话 pip 会从
+> PyPI 拿默认的 CUDA 版，顺带拖进 nvidia-cudnn / cublas / cufft 等合计 3~4GB 用不到的库，
+> **镜像体积从 ~1.5GB 涨到 8GB 左右**（实测解析结果：`torch-2.14.0+cpu` 196MB，
+> 而 `torch-2.14.0` 是 554MB 再加 3GB 的 nvidia-*）。这一段绕不开，但已经是几百 MB 而不是几个 G。
+> 不传上面两个构建参数时行为和以前完全一致，CI 也不受影响。
 
 Compose 一共 5 个服务：`mysql`、`redis`、`backend`（API）、`worker`（定时任务，与 backend
 同镜像不同入口）、`web`（Nginx + 两个前端产物）。API 进程里 **不跑**定时任务
@@ -402,20 +407,28 @@ openssl rand -hex 32   # → JWT_SECRET_KEY
 > 而宿主机那个目录归谁取决于「谁 clone 的仓库」，root clone 再 sudo 部署就写不进去，
 > 后台传图直接 500，报错位置离原因还很远；部署自检里补了一条「真传一张图」把这类问题钉住。
 >
+> 本地完整跑一遍时**真踩到并修掉的两个**（都是 CI 一定发现不了的）：
+> ① `web` 的 `depends_on` 原本等 `backend: service_healthy`，而后端首次启动要下载 BGE
+> 模型，慢网络下超过 `start_period` 被判成 unhealthy，compose 的处理是**直接报错退出**——
+> 结果是 `up -d` 失败、web 容器连创建都没创建，站点根本不存在。改成 `service_started`
+> 后 nginx 立刻托管前端，后端就绪前 `/api` 返回 502、好后自动恢复。
+> ② worker 与 backend 共用镜像，于是也继承了镜像里那条「请求 `/health`」的 HEALTHCHECK，
+> 但 worker 根本不跑 HTTP 服务，那条检查对它**永远失败**，`docker compose ps` 里常年挂着
+> 一个 (unhealthy) 纯噪音。换成「PID 1 确实是那个定时任务进程」。
+>
 > 部署这套东西**验证到哪一步了**（说清楚，免得当成已经万无一失）：
 >
 > - 镜像能不能构建出来、三层 compose 的合并结果对不对 —— CI 每次提交验证；
 > - `check-env.sh` 的判定逻辑有反向用例（喂坏配置**必须**被拒）—— CI 每次提交验证；
-> - **`web/nginx.conf` 与 `deploy/smoke.sh` 用真实容器跑过一次**：拉了个 nginx 镜像、
->   挂上是仓库里这份 nginx.conf 和两个真实构建产物、反代到本机后端，再让 smoke.sh
->   从真实入口走一遍 —— **16 项全过，0 失败 0 警告**。这一条覆盖的是 CI 覆盖不到的部分：
->   端到端测试跑的是 Vite 预览服务器，不是 nginx，所以 SPA 回退、`/admin/` 子路径、
->   `/assets/` 长缓存、SSE 反代不缓冲这些此前一次都没被执行过。
+> - **五个容器一起起来、跑通全链路**：`docker compose up -d --build` 起 mysql / redis /
+>   backend / worker / web，再用 `deploy/smoke.sh` 从真实入口走一遍 —— **16 项全过，
+>   0 失败 0 警告**。这一条覆盖了 CI 覆盖不到的部分：端到端测试跑的是 Vite 预览服务器
+>   而不是 nginx，所以 SPA 回退、`/admin/` 子路径、`/assets/` 长缓存、SSE 反代不缓冲，
+>   以及「容器里的 entrypoint 以非 root 跑迁移和播种」此前一次都没被执行过。
+>   这个过程中真踩到并修掉了两个 bug（见下面「部署这一轮补掉的」）。
 >
-> **还没有验证过的是两件事**：① `bootstrap.sh` 在真实服务器上的端到端执行（开发机是
-> Windows，跑不了 `get.docker.com` 与 systemd 那条路径）；② 五个容器**一起**起来的时序
-> （后端容器里的 entrypoint 等 MySQL → 迁移 → 播种 → uvicorn、worker 的定时循环、
-> web 等 backend healthy 才启动）。README 里有等价的手动步骤兜底。
+> **还没有验证的是**：`bootstrap.sh` 在真实 Linux 服务器上的端到端执行——开发机是 Windows，
+> 跑不了 `get.docker.com` 与 systemd 那条路径。README 里有等价的手动步骤兜底。
 
 ## 运行测试
 

@@ -14,6 +14,19 @@ langchain-text-splitters==0.3.5
 langchain-openai==0.2.14
 langchain-huggingface==0.1.2
 modelscope
+
+# CPU 版 torch：模型是强制跑 CPU 的（见 app/ai/vectorstore.py 里的
+# model_kwargs={"device": "cpu"}），所以必须显式要 CPU 版。
+# 不写这一条的话，pip 会从 PyPI 拿默认的 CUDA 版，顺带拖进
+# nvidia-cudnn-cu13（单个 553MB）、cublas、cufft 等合计 3~4GB 完全用不到的库，
+# 镜像体积从 ~1.5GB 涨到 8GB 左右 —— 小磁盘的机器上光是拉镜像就能把盘占满。
+# `+cpu` 在 PEP 440 里大于同名版本号，所以加上这个 extra-index-url 之后
+# pip 会优先挑 CPU 版。实测解析结果：
+#   torch-2.14.0+cpu（196MB） 而不是 torch-2.14.0（554MB，另加 3GB nvidia-*）
+# 顺带让 CI 的安装步骤也少下 3GB 多。
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+
 sentence-transformers
 chromadb==1.5.9
 # 混合检索：jieba 做中文分词，rank_bm25 做词频召回（见 app/ai/retriever.py）
