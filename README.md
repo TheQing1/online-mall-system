@@ -191,6 +191,37 @@ DOMAIN=mall.example.com DEEPSEEK_API_KEY=sk-xxx sudo -E bash deploy/bootstrap.sh
 | 日志轮转（`max-size` / `max-file`） | docker 的 json 日志默认无限增长，demo 挂几个月能把 20G 系统盘写满 |
 | `deploy/smoke.sh` | `/health` 只证明进程活着。「能打开但白屏」「搜索没结果」「种子数据没进库」这些它全都发现不了，而它们恰恰是最常见的翻车方式 |
 
+<details>
+<summary>一键脚本万一失败：手动步骤（等价，6 条命令）</summary>
+
+脚本本身没做任何魔法，出问题时照着敲一遍就能定位到是哪一步：
+
+```bash
+cp .env.example .env
+# 手改 .env：
+#   MYSQL_ROOT_PASSWORD=$(openssl rand -hex 16)
+#   JWT_SECRET_KEY=$(openssl rand -hex 32)
+#   API_BIND=127.0.0.1                     # 调试端口不对外
+#   没有域名：WEB_BIND=0.0.0.0  WEB_HTTP_PORT=80
+#   有域名：  WEB_BIND=127.0.0.1 WEB_HTTP_PORT=8080  DOMAIN=你的域名
+sh deploy/check-env.sh                     # 有域名加 --tls
+
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+
+$COMPOSE build
+$COMPOSE up -d mysql redis
+# 迁移 + 种子数据 + 预热模型，都在这一步做完（跑在 `up -d` 之前是关键）
+$COMPOSE run --rm backend sh -c \
+  'alembic -c /app/alembic.ini upgrade head && python -m app.core.seed && python -m app.ai.warmup'
+$COMPOSE up -d
+
+sh deploy/smoke.sh                         # 有域名改成 BASE_URL=https://你的域名
+```
+
+有域名的版本还要给每条命令加 `-f docker-compose.tls.yml`。
+
+</details>
+
 ### HTTPS（有域名才需要）
 
 填了 `DOMAIN` 时 bootstrap 会自动叠上 Caddy，由它向 Let's Encrypt 申请并续期证书，
@@ -355,6 +386,12 @@ openssl rand -hex 32   # → JWT_SECRET_KEY
 > 挡在启动前；`deploy/smoke.sh` 从用户入口走一遍关键链路；`docker-compose.prod.yml`
 > 要求密钥必须显式给值并加日志轮转；`docker-compose.tls.yml` 用 Caddy 自动签发并
 > 续期证书。
+>
+> 部署这套东西**验证到哪一步了**（说清楚，免得当成已经万无一失）：镜像能不能构建出来、
+> 三层 compose 的合并结果对不对，由 CI 每次提交验证；`check-env.sh` 的判定逻辑有反向
+> 用例（喂坏配置必须被拒）；脚本语法也在 CI 里过一遍。**没有验证过的是
+> `bootstrap.sh` 在真实服务器上的端到端执行**——开发机是 Windows，跑不了
+> `get.docker.com` 与 systemd 那条路径。第一次上服务器时请留意，README 里有等价的手动步骤兜底。
 
 ## 运行测试
 
