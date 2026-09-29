@@ -101,7 +101,8 @@ MySQL 8.0 建库并升级表结构：
 cd backend
 cp .env.example .env        # 如有 .env 直接修改
 alembic upgrade head        # 迁移：老库自动补列/回填 SKU，新库自动建表
-python -m app.core.seed     # 种子数据：admin/demo 账号、商品、Banner、知识库
+# 种子数据：admin/demo 账号、59 个商品 / 130 个 SKU（5 大类 17 小类全都有商品）、
+# Banner、知识库。数据在 backend/app/core/catalog.py，写库逻辑在 seed.py
 ```
 
 > 首次运行会自动通过 ModelScope 下载本地 Embedding 模型（约 100MB）。
@@ -415,6 +416,14 @@ openssl rand -hex 32   # → JWT_SECRET_KEY
 > ② worker 与 backend 共用镜像，于是也继承了镜像里那条「请求 `/health`」的 HEALTHCHECK，
 > 但 worker 根本不跑 HTTP 服务，那条检查对它**永远失败**，`docker compose ps` 里常年挂着
 > 一个 (unhealthy) 纯噪音。换成「PID 1 确实是那个定时任务进程」。
+>
+> 还有两处商品数据的问题，都是「只有真打开页面才看得见」：
+> ① 商品图**张冠李戴**——上一版种子里 `IMG` 的键名和图片内容完全对不上
+> （`phone_1` 是 AirPods、`watch` 是冰箱广告、`tea` 是手机照片），17 个商品里只有 1 个图是对的。
+> 根因是「给图片起了想象中的名字」，映射写错了不会有任何报错。现在图片文件名就是商品 slug，
+> 文件名即事实；商品从 17 个扩到 59 个，17 个二级分类每个都有商品。
+> ② 商品详情页**分类显示「未分类」**——列表接口会给 `category_name` 赋值，详情接口漏了，
+> 同一个字段两条路径行为不一致，前端就回落成了默认文案。
 >
 > 部署这套东西**验证到哪一步了**（说清楚，免得当成已经万无一失）：
 >

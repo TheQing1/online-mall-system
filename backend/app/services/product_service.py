@@ -211,12 +211,17 @@ def get_product(db: Session, product_id: int) -> Optional[dict]:
 def _load_product(db: Session, product_id: int) -> Optional[dict]:
     product = (
         db.query(Product)
-        .options(selectinload(Product.skus))
+        # 分类也要 eager load：详情页要显示「分类: xxx」，以前这里没设
+        # category_name（列表接口设了、详情接口漏了），于是每个商品详情页
+        # 都显示「分类: 未分类」。同一个字段两条路径行为不一致，是很容易漏的 bug。
+        .options(selectinload(Product.skus), selectinload(Product.category))
         .filter(Product.id == product_id, Product.status == ProductStatus.ON)
         .first()
     )
     if product is None:
         return None
+    if product.category:
+        product.category_name = product.category.name
     return _to_json(ProductOut.model_validate(product))
 
 
