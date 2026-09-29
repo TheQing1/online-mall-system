@@ -5,14 +5,31 @@
 .gitignore
 .github
 
+# 环境与密钥。现在没有哪个 Dockerfile 用 COPY . ，但这是个不该赌的默认值：
+# 一旦有人加了 COPY . .，根目录那份带真实密钥的 .env 就进镜像了。
+.env
+
 # 依赖与虚拟环境
+#
+# node_modules 必须写成 **/node_modules。不带 **/ 的写法只匹配构建上下文**根目录**下
+# 的 node_modules，匹配不到 frontend/node_modules 与 admin/node_modules —— 实测过：
+# 上下文会从 ~15MB 涨到 323MB（就是那两个目录的大小）。
+# 后果不只是慢：web/Dockerfile 里 `npm ci` 之后还有一句 `COPY frontend .`，会把宿主机上
+# 那份**平台相关**的依赖覆盖掉容器里刚装好的 Linux 版；而 Vite 8 用的 rolldown 带原生
+# 二进制，覆盖完当场构建失败。
+# CI 发现不了这个问题：CI 是全新检出，`docker build` 之前不会先跑 `npm ci`，
+# 只有「本地装过依赖再构建镜像」这条路才会踩到。
 .venv
 venv
-node_modules
+**/node_modules
 **/__pycache__
 **/*.py[cod]
 **/.pytest_cache
 **/.ruff_cache
+
+# 前端构建产物：镜像里会在容器内重新构建，没必要把本地产物也传进上下文
+frontend/dist
+admin/dist
 
 # 大文件 / 自动生成
 # 向量库与 Embedding 模型缓存（约 183MB）在 backend/data 下，由 compose 用

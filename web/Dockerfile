@@ -5,14 +5,19 @@ WORKDIR /app/frontend
 # 先只 COPY 依赖清单再 npm ci：源码改动不会让依赖安装层缓存失效。
 # 这里不再用 package-lock.json* 通配：npm ci 必须有 lock 文件，缺失时应当直接构建失败。
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+# NPM_REGISTRY 是给国内构建用的：
+#   docker compose build --build-arg NPM_REGISTRY=https://registry.npmmirror.com
+# 不传就用 npm 默认源，行为与以前一致。
+ARG NPM_REGISTRY
+RUN if [ -n "$NPM_REGISTRY" ]; then npm ci --registry="$NPM_REGISTRY"; else npm ci; fi
 COPY frontend .
 RUN npm run build
 
 FROM node:22-alpine AS admin-builder
 WORKDIR /app/admin
 COPY admin/package.json admin/package-lock.json ./
-RUN npm ci
+ARG NPM_REGISTRY
+RUN if [ -n "$NPM_REGISTRY" ]; then npm ci --registry="$NPM_REGISTRY"; else npm ci; fi
 COPY admin .
 RUN npm run build
 

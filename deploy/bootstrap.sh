@@ -214,7 +214,26 @@ fi
 # ---------------------------------------------------------------- 6. 构建
 
 log "构建镜像（首次会下载依赖，约 5-15 分钟）"
-"${COMPOSE[@]}" build
+
+# 国内服务器上构建慢到几乎跑不完：Docker Hub 拉基础镜像、PyPI 拉 torch（解压后接近 2GB）
+# 都可能卡住。镜像加速器只管前一半，所以这里把 pip / npm 的源也做成可传的。
+#
+#   PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+#   NPM_REGISTRY=https://registry.npmmirror.com \
+#   sudo -E bash deploy/bootstrap.sh
+#
+# 不设这两个变量就按默认源走，和国外服务器上的行为一致。
+BUILD_ARGS=()
+if [ -n "${PIP_INDEX_URL:-}" ]; then
+  BUILD_ARGS+=(--build-arg "PIP_INDEX_URL=${PIP_INDEX_URL}")
+  echo "pip 源：${PIP_INDEX_URL}"
+fi
+if [ -n "${NPM_REGISTRY:-}" ]; then
+  BUILD_ARGS+=(--build-arg "NPM_REGISTRY=${NPM_REGISTRY}")
+  echo "npm 源：${NPM_REGISTRY}"
+fi
+
+"${COMPOSE[@]}" build "${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}"
 
 # ---------------------------------------------------------------- 7. 起依赖
 
