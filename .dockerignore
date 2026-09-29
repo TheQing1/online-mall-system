@@ -24,9 +24,6 @@ backend/app/chroma_db
 backend/models
 backend/chroma_db
 
-# 商品图片由 docker-compose 以 volume 挂载，不打进镜像
-backend/static/products
-
 # 文档与内部草稿
 docs
 .superpowers
