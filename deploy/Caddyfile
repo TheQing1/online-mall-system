@@ -1,0 +1,30 @@
+# 自动 HTTPS 的 TLS 终结层。
+#
+# 域名从根目录 .env 的 DOMAIN 读。Caddy 会自动向 Let's Encrypt 申请证书、
+# 自动续期、自动把 http 重定向到 https —— 这三件事都不需要额外脚本或定时任务，
+# 这也是这里选 Caddy 而不是 nginx + certbot 的唯一原因。
+#
+# 为什么前面已经有一层 nginx 还要再放一个 Caddy：web/nginx.conf 里已经调好了
+# 静态资源长缓存、安全响应头、SSE 不缓冲、/admin 子路径这些细节，换掉它等于
+# 把这些重新验证一遍；而 Caddy 拿证书只要一行域名。代价是多一跳反代，
+# 但那一跳走的是 compose 内部网络，亚毫秒级，可以忽略。
+
+{
+	# 证书快到期时 Let's Encrypt 会往这个邮箱发提醒。留空也能签发
+	# （ACME v2 不强制邮箱），这里给个占位值只是为了让配置不为空。
+	email {$ACME_EMAIL:no-reply@example.com}
+}
+
+{$DOMAIN} {
+	# 前端产物是 JS/CSS/HTML，压缩收益明显；zstd 给支持的浏览器，gzip 兜底。
+	encode zstd gzip
+
+	reverse_proxy web:80
+
+	log {
+		output file /data/access.log {
+			roll_size 10MB
+			roll_keep 3
+		}
+	}
+}

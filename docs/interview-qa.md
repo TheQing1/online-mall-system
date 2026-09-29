@@ -498,31 +498,68 @@ ruff 刻意只开 `F`（如 F821 undefined-name）和 `E9`：**只拦「一定�
 
 ### 40. 怎么部署
 
-`docker compose up -d --build` 起三个服务：
+`docker compose up -d --build` 起 5 个服务，另有两层按需叠加：
 
 - **mysql**（8.0，healthcheck，口令通过 `MYSQL_PWD` 传，不出现在 `ps` 里）；
+- **redis**（缓存 / 限流 / 分布式锁，挂掉时整体降级，不会因此起不来）；
 - **backend**：entrypoint 带**超时上限**地等待 MySQL 就绪（原先是无上限循环，数据库起不来
   容器就永久挂住）→ `alembic upgrade head` → `python -m app.core.seed`（幂等）→ uvicorn；
   镜像**非 root 运行**并带 HEALTHCHECK；
+- **worker**：和 backend 同镜像不同入口（`python -m app.core.tasks`）跑定时关单，
+  API 进程里 `RUN_BACKGROUND_TASKS=false`，所以 backend 可以放心扩到多副本；
 - **web**：多阶段构建（两个 node 阶段 `npm ci` + build）→ nginx 托管静态产物并反代
   `/api`、`/static`，`web` 会等 backend healthy 才启动。
+
+生产再叠一层 `docker-compose.prod.yml`（密钥必须显式给值、日志轮转、把
+`X-Forwarded-For` 的信任范围收成 Docker 网段），有域名再叠 `docker-compose.tls.yml`
+让 Caddy 自动签发并续期证书。到服务器上就是一条命令：
+
+```bash
+sudo bash deploy/bootstrap.sh
+```
+
+脚本依次做：装 Docker → 生成随机数据库口令与 JWT 密钥写进 `.env` →
+`deploy/check-env.sh` 校验 → 构建镜像 → 起 MySQL/Redis → 迁移 + 种子数据 →
+**预热 Embedding 模型** → 起全部服务 → `deploy/smoke.sh` 自检。
 
 Nginx 关键配置：`/api/` 反代 `proxy_buffering off` + `proxy_cache off`（否则 SSE 被缓冲）、
 `client_max_body_size 8m`（默认 1m 会让 2MB 的图片上传直接 413）、gzip、安全响应头
 （CSP 逐条注明放开条件）、带 hash 的 `/assets/` 长缓存。
 
+**这一节最值得主动讲的两点**（都是写脚本时才发现"不这么做一定出事"）：
+
+1. **模型预热必须放在 `up -d` 之前。** 放到之后的话，第一个访问的人要替我们等
+   100MB 模型下载；更麻烦的是 backend 在这期间一直是 unhealthy，而 `web` 是
+   `depends_on: service_healthy`，于是**整个站点根本不会启动**——现象是"部署失败"，
+   但每个容器的日志看起来都正常，很难查。
+2. **端口不写在 prod override 里。** docker compose 对 `ports` 是**合并**而不是替换
+   （实测过：base 写 `8000:8000`、override 写 `127.0.0.1:8000:8000`，解析结果里两条都在，
+   启动时第二个绑不上、报端口被占用）。所以端口统一由 `.env` 变量驱动，
+   由 `check-env.sh` 断言它到底收没收紧。
+
 ### 41. 上线前还差什么（主动列出，显示清楚边界）
 
-**安全**：HTTPS（HSTS 已在 nginx 注释好，等 TLS 终结后打开）、refresh token、
-上传魔数校验；JWT 仍在 localStorage；backend 的 8000 端口直连宿主机，所以
-`--forwarded-allow-ips='*'` 是有折扣的信任，生产要收紧。
-登录/下单/聊天已限流，但**其余接口不限流**；限流是固定窗口，边界可能出现两倍突发。
+**安全**：HTTPS 的通路有了（`docker-compose.tls.yml` + Caddy 自动签发续期），但
+**当前这份 demo 到底有没有跑在 HTTPS 上，取决于部署时填没填 `DOMAIN`**——没域名就是纯
+HTTP；nginx 里的 HSTS 仍是注释状态，等真在 TLS 后面终结再开。JWT 仍在 localStorage、
+没有 refresh token。上传做了扩展名白名单 + 文件头（魔数）校验，但魔数挡不住精心构造的
+多格式文件，彻底的做法是解码后重新编码再落盘。
 
-**数据库**：`alembic downgrade` 目前只有索引迁移是真实可用的，V2 那个大迁移仍是 `pass`。
+**配置安全**：生产路径上 backend 的 8000 收到回环、`X-Forwarded-For` 信任范围收到
+Docker 网段，并且由 `check-env.sh` 在启动**前**断言——但这是"部署脚本保证"而不是
+"配置文件保证"，手写 `docker compose up` 还是可能漏。本地那套 compose 仍然是
+0.0.0.0:8000 + 信任任意来源。
 
-**稳定性**：定时任务已用 Redis 分布式锁 + 独立 worker 解决多副本问题；
-日志已是结构化 JSON 并带 request_id、也暴露了 Prometheus 指标，但**没有告警规则**
-（指标有了没人看等于没有）；缓存没做多级，Redis 挂掉的降级期内读请求会直接压到 MySQL。
+**数据库**：V2 大迁移的 `downgrade()` 已是真实实现（有真实 MySQL 的
+`upgrade → downgrade → upgrade` 往返用例守着）；但数据本身不可恢复，生产回滚前必须先备份。
+
+**稳定性**：定时任务已用 Redis 分布式锁 + 独立 worker 解决多副本问题；日志是结构化
+JSON 并带 request_id、也暴露了 Prometheus 指标，还配了 6 条告警规则，但**没有接通知渠道**
+（Alertmanager / 钉钉），指标也没有长期存储——规则写了但没人被叫醒，等于只做了一半。
+缓存没做多级，Redis 挂掉的降级期内读请求会直接压到 MySQL，多副本时进程内单飞也不够。
+
+**限流**：固定窗口而不是令牌桶，窗口边界可能出现两倍突发；也没有按用户等级 /
+接口成本做差异化配额。
 
 **前端**：无 TypeScript、无单元测试；各页面里还留着早期手写的 `onMounted` 登录判断
 （已被全局守卫取代，属冗余）。
@@ -735,3 +772,30 @@ label 基数会炸）；指标是自己用 `prometheus_client` 写的（`prometh
 **只回滚 V2 新增的结构，保留基础表**——`upgrade` 里那些表是「缺了才建」，
 根本分不清是 V1 带来的还是这次迁移建的，**宁可少删**（多留一张空表不会出事，删错一张表就是事故）。
 数据本身不可恢复，所以生产回滚前必须先备份。
+
+---
+
+## 十一、部署与运维脚本
+
+### 54. 怎么保证「不是只能在我机器上跑」
+
+三个脚本各管一段，每个都能单独拷到服务器上跑（所以没有抽公共库）：
+
+- **`deploy/check-env.sh`** —— 启动**前**拦住"能跑起来但实际裸奔"的配置。
+  compose 对几乎所有变量都给了能跑的默认值，所以漏配**不会报错**，只会表现成
+  "站点能打开但认证形同虚设""接口文档挂在公网上"，浏览器里完全看不出来。
+- **`deploy/smoke.sh`** —— 从用户真正访问的那个地址出发走一遍关键链路：后端存活 →
+  两个前端首页 → 构建产物真的在镜像里 → 商品接口与种子数据 → 搜"鞋子"能命中"运动鞋"
+  → 普通用户登录 → 后台看板 → AI 客服 SSE。`/health` 只能证明进程活着，
+  "打开是白屏""搜不出东西""种子没进库"它一条都发现不了，而它们恰恰是最常见的翻车方式。
+- **`deploy/bootstrap.sh` / `deploy/reset-demo.sh`** —— 一键部署 / 演示数据重置。
+  重置**只删 MySQL 数据卷**，不动 `mall-data`（里面是 100MB 的 Embedding 模型）。
+
+**关键点：这些断言本身也要被验证。** 只做正向用例的话，校验逻辑哪怕一直返回 0
+也发现不了。所以 CI 里有**反向验证**：故意喂一份示例密钥和一份空 JWT 密钥，
+断言 `check-env.sh` 与 prod 层**必须**拒绝；再喂随机密钥，断言**必须**通过。
+
+还有一个容易被忽略的洞：**CI 之前从来不构建镜像**。它只跑 python / npm，所以
+Dockerfile 写错、compose 变量拼错、nginx 配置语法错，全都要等到真正部署那一刻才炸——
+而那正是最不该出问题的时刻。现在多了一个 job，每次提交都真的构建 backend 与 web 镜像，
+并把 base / prod / tls 三层 compose 的合并结果解析一遍。

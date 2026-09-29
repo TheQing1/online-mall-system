@@ -1,0 +1,48 @@
+# 自动 HTTPS 层：在 base 之上再叠一层，让 Caddy 终结 TLS。
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#                  -f docker-compose.tls.yml up -d
+#
+# 三个前置条件（deploy/bootstrap.sh 全部自动做掉）：
+#   1. .env 里的 DOMAIN 是一个已经解析到本机公网 IP 的域名，
+#      并且本机的 80/443 能从公网访问 —— Let's Encrypt 校验域名所有权时
+#      必须能连上 80/443，这一步过不了就拿不到证书；
+#   2. .env 里 WEB_BIND=127.0.0.1、WEB_HTTP_PORT=8080：
+#      80/443 让给 Caddy，nginx 仍只在宿主机内部可达（想直接排查 nginx 时很省事）；
+#   3. 服务器防火墙/安全组放行 80 与 443。
+#
+# 没有域名、只有公网 IP 也想演示的话**不要**用这一层：
+# 直接用基础 compose，访问 http://服务器IP 即可（浏览器会提示不安全，但功能完整）。
+
+services:
+  caddy:
+    image: caddy:2.9-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      # HTTP/3 走 UDP；不加这一行也能用 HTTPS，只是退回到 HTTP/2
+      - "443:443/udp"
+    environment:
+      # `:?` —— 忘了设 DOMAIN 就让 compose 当场失败，而不是起一个拿不到证书的空壳
+      DOMAIN: ${DOMAIN:?启用 TLS 层必须设置 DOMAIN（见 .env.example）}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      # Caddyfile 用只读挂载：配置改动要重启容器，避免「文件改了但没生效」的错觉
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # /data 存证书与访问日志，必须持久化：证书丢了会触发 Let's Encrypt 的
+      # 「同一域名重复签发」限流（每周 5 次），运气不好要等一周
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      web:
+        condition: service_started
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy-data:
+  caddy-config:

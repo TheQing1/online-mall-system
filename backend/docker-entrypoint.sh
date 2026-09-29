@@ -32,11 +32,14 @@ python -m app.core.seed
 
 # --proxy-headers + --forwarded-allow-ips：nginx 已经会带上 X-Forwarded-For/Proto，
 # 不打开这两个开关 uvicorn 会把请求来源记成 nginx 容器的 IP。
-# 用 '*' 信任任意来源，仅在 backend 不直接对外暴露时才安全（见报告：当前 compose 把
-# 8000 直接映射到了宿主机，所以这层信任是打了折扣的）；最稳妥的生产做法是收紧成
-# nginx 所在网段，例如 --forwarded-allow-ips='172.16.0.0/12'。
+# 默认值 '*' 表示信任任意来源，仅在 backend 不直接对外暴露时才安全。本地 compose
+# 为了能直接看 /docs 把 8000 映射到了宿主机，所以这层信任是打了折扣的；
+# 生产用 docker-compose.prod.yml，它把端口收到 127.0.0.1 并把本变量收紧成
+# Docker 网段（172.16.0.0/12），此时伪造 X-Forwarded-For 就不生效了。
+FORWARDED_ALLOW_IPS="${FORWARDED_ALLOW_IPS:-*}"
+
 # 单 worker：app/core/tasks.py 的订单超时自动关单任务挂在 FastAPI lifespan 上，
 # 每个 worker 进程都会各起一份，多 worker 会让同一批超时订单被并发重复处理。
 echo "==> 启动 API 服务..."
 exec uvicorn app.main:app --host 0.0.0.0 --port 8000 \
-  --proxy-headers --forwarded-allow-ips='*'
+  --proxy-headers --forwarded-allow-ips="$FORWARDED_ALLOW_IPS"
