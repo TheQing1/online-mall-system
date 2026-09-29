@@ -57,12 +57,25 @@ fi
 
 # ---------------------------------------------------------------- 2. Docker
 
-log "检查 Docker"
+log "检查依赖"
+# curl 有两处要用：装 Docker 的官方脚本，以及最后那步部署自检（deploy/smoke.sh）。
+# 只在「装 Docker 时」才装 curl 会漏掉后面那种情况——Docker 已经有了、curl 没有，
+# 结果一路跑到自检才失败。
+if ! command -v curl >/dev/null 2>&1; then
+  echo "安装 curl…"
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update && apt-get install -y curl
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y curl
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y curl
+  else
+    die "没有 curl，也没有 apt-get/dnf/yum，请手动安装 curl 后重跑"
+  fi
+fi
+
 if ! command -v docker >/dev/null 2>&1; then
   echo "没装 Docker，使用官方脚本安装（get.docker.com）…"
-  if ! command -v curl >/dev/null 2>&1; then
-    apt-get update && apt-get install -y curl
-  fi
   curl -fsSL https://get.docker.com | sh
   systemctl enable --now docker
 else
