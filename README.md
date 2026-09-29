@@ -125,10 +125,10 @@ cd frontend && npm install && npm run dev   # http://localhost:5173
 cd admin    && npm install && npm run dev   # http://localhost:5174/admin/login
 ```
 
-## Docker 一键启动（推荐演示）
+## 本地一键启动（Docker）
 
 ```bash
-# 可选：准备 .env 配置 DeepSeek Key
+cp .env.example .env          # 标了【必须改】的两项，本地随便填也行
 DEEPSEEK_API_KEY=sk-xxx docker compose up -d --build
 
 # 服务就绪后访问
@@ -137,8 +137,14 @@ DEEPSEEK_API_KEY=sk-xxx docker compose up -d --build
 # API:   http://localhost:8000/docs
 ```
 
-Web 容器会自动执行 `alembic upgrade head` → 种子数据 → 启动 API；
+`backend` 容器启动时自动执行 `alembic upgrade head` → 种子数据 → 启动 API；
+**首次**启动的种子数据会同步向量索引，顺带下载约 100MB 的 BGE 模型，等几分钟是正常的
+（healthcheck 的 `start_period` 为此给到 300 秒；预热过之后只要十几秒，见下面的部署一节）。
 Nginx 负责 `/api`、`/static` 反代与两个 SPA 静态托管。
+
+> 根目录的 `.env` 是给 **docker compose** 用的（容器之间怎么连、部署密钥、对外端口）；
+> `backend/.env` 是给**不用 Docker、直接在宿主机跑 uvicorn** 用的。两份不能混着抄——
+> 容器里连的是 `mysql` / `redis` 这两个服务名，不是 `localhost`。
 
 Compose 一共 5 个服务：`mysql`、`redis`、`backend`（API）、`worker`（定时任务，与 backend
 同镜像不同入口）、`web`（Nginx + 两个前端产物）。API 进程里 **不跑**定时任务
@@ -153,6 +159,83 @@ docker compose --profile observability up -d   # 额外起 prometheus + grafana
 
 只要指标本身的话不需要任何额外服务：`curl localhost:8000/metrics` 就能拿到
 （nginx 没有反代 `/metrics`，所以它不随站点对外暴露）。
+
+## 部署到服务器（在线 Demo）
+
+一台能跑 Docker 的 Linux 服务器 + 一个域名就够了。整条链路一条命令：
+
+```bash
+git clone https://github.com/TheQing1/online-mall-system.git
+cd online-mall-system
+sudo bash deploy/bootstrap.sh
+```
+
+脚本会依次做完：装 Docker → **生成随机数据库口令和 JWT 密钥**写进 `.env` →
+校验配置 → 构建镜像 → 起 MySQL/Redis → 跑迁移与种子数据 →
+**预热 Embedding 模型** → 起全部服务 → 跑一遍部署自检。
+全程可以无人值守：
+
+```bash
+DOMAIN=mall.example.com DEEPSEEK_API_KEY=sk-xxx sudo -E bash deploy/bootstrap.sh
+```
+
+### 为什么要有这些步骤，而不是 `compose up` 就完事
+
+每一件都对应一个具体的失败形态，不是「最佳实践」清单：
+
+| 补的东西 | 不补会怎么样 |
+|---|---|
+| `deploy/check-env.sh` | compose 对几乎每个变量都给了能跑的默认值，所以漏配不报错，只表现成「站点能开但认证形同虚设」——浏览器里完全看不出来 |
+| 模型预热放在 `up -d` 之前 | 第一个访问的人替我们下载 100MB 模型；期间 backend 一直 unhealthy，`web`（`depends_on: service_healthy`）根本不会启动，看起来像「部署失败」却查不出原因 |
+| `docker-compose.prod.yml` 要求密钥必须显式给值 | `JWT_SECRET_KEY` 悄悄回落到 `change-me-in-production`，任何人都能签一个管理员 token 登进后台 |
+| 日志轮转（`max-size` / `max-file`） | docker 的 json 日志默认无限增长，demo 挂几个月能把 20G 系统盘写满 |
+| `deploy/smoke.sh` | `/health` 只证明进程活着。「能打开但白屏」「搜索没结果」「种子数据没进库」这些它全都发现不了，而它们恰恰是最常见的翻车方式 |
+
+### HTTPS（有域名才需要）
+
+填了 `DOMAIN` 时 bootstrap 会自动叠上 Caddy，由它向 Let's Encrypt 申请并续期证书，
+HTTP 自动跳 HTTPS——不需要写任何定时任务。手动起是：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+               -f docker-compose.tls.yml up -d
+```
+
+> 前置条件只有一个：启动前域名已经解析到本机公网 IP，且 80/443 能从公网访问
+> （Let's Encrypt 校验域名所有权必须走这两个端口）。没有域名就**不要**叠这一层，
+> 直接用 `http://服务器IP` 访问，功能完全一样，只是浏览器会提示不安全。
+
+### 部署自检与重置
+
+```bash
+sh deploy/smoke.sh                                  # 默认测 http://localhost
+BASE_URL=https://mall.example.com sh deploy/smoke.sh  # 测线上
+```
+
+它从「用户真正访问的那个地址」出发走一遍关键链路：后端存活 → 两个前端首页 →
+构建产物真的在镜像里 → 商品接口与种子数据 → **搜「鞋子」能命中「运动鞋」**
+（这是历史上真出过问题的回归点，放进自检里守着）→ 普通用户登录 → 管理后台看板 →
+AI 客服 SSE。没有配 DeepSeek Key 时 AI 那一条是**警告**而不是失败——商城本身是完整的，
+但会明确告诉你「演示 AI 能力必须补上这个 Key」。
+
+公开的 demo 站谁都能注册、下单、改后台，演示前发现首页躺着几笔乱七八糟的订单很正常：
+
+```bash
+sudo bash deploy/reset-demo.sh      # 只重建 MySQL 数据卷，模型缓存不动，约 1 分钟
+```
+
+## 5 分钟能看到什么（演示动线）
+
+如果只有五分钟，按这个顺序走，每一步都对应一个能讲的技术点：
+
+| # | 操作 | 背后在做什么 |
+|---|---|---|
+| 1 | 打开首页，随便逛逛分类和商品详情 | 商品读路径走 Redis 缓存（50 并发实测 P99 51ms → 23ms），缓存带击穿/穿透/雪崩三道防护 |
+| 2 | 搜索框里搜「鞋子」（库里商品名是「运动鞋」），再试「mate60」「Ｍａｔｅ６０」「512G」 | 查询理解层：NFKC 归一化 + 分词 + 同义词表 + AND→OR 兜底。规则是数据不是代码，加词只加一行 |
+| 3 | 打开右下角 AI 客服，问「你们支持七天无理由退货吗」，接着追问「那运费谁出」 | 多轮会话改写 → 混合检索（向量 + jieba BM25 加权融合）→ DeepSeek 流式生成，边收边渲染 |
+| 4 | 用 demo/demo123 登录，选 SKU 加购、下单、进收银台支付 | SKU 快照、订单状态机（白名单流转 + 条件 UPDATE 乐观并发）、30 分钟未支付自动关单并回补库存 |
+| 5 | 换 admin/admin123 进 `/admin/login`，看数据看板 → 商品管理 → 退款审核 → RAG 评测点一次「一键评测」 | 后台全部走管理员鉴权；RAG 评测跑的是**和线上同一条** `retrieve()`，不是另写一份 |
+| 6 | `http://127.0.0.1:8000/metrics`（仅本机）或 `--profile observability` 起的 Grafana | 请求量/延迟/缓存命中/限流拦截/依赖可用性/定时任务，配 6 条告警规则 + 看板 |
 
 ## 默认账号
 
@@ -186,6 +269,17 @@ MAX_UPLOAD_SIZE=2097152
 > 完整清单见 `backend/.env.example`。`backend/.env` 含真实密钥，已被 `.gitignore` 忽略，
 > 请勿提交或打包外发。
 
+用 Docker 部署时改的是**根目录**那份，变量不一样（管的是容器编排而不是应用配置）：
+
+```bash
+cp .env.example .env
+openssl rand -hex 16   # → MYSQL_ROOT_PASSWORD
+openssl rand -hex 32   # → JWT_SECRET_KEY
+```
+
+完整清单见根目录 `.env.example`，每一项都有注释说明「不填会怎样」。
+部署前可以先自查一遍：`sh deploy/check-env.sh`（加 `--tls` 连 HTTPS 的配置一起查）。
+
 ## 项目结构
 
 ```
@@ -203,8 +297,11 @@ MAX_UPLOAD_SIZE=2097152
 ├─ docs/interview-qa.md # 面试问答（与代码同步维护）
 ├─ docs/resume-project.md # 简历描述三版 + 数字证据索引
 ├─ .github/workflows    # CI
-├─ web/                 # Nginx + 前端产物 Dockerfile
-└─ docker-compose.yml
+├─ web/                 # Nginx 配置 + 前端产物 Dockerfile
+├─ deploy/              # 部署：一键脚本 / 配置校验 / 自检 / 演示数据重置 / Caddyfile
+├─ docker-compose.yml      # 本地与生产共用的基线
+├─ docker-compose.prod.yml # 生产加固层（密钥必填、日志轮转、收紧转发信任）
+└─ docker-compose.tls.yml  # 自动 HTTPS 层（Caddy）
 ```
 
 > `backend/data/`（可用环境变量 `DATA_DIR` 覆盖）刻意放在 Python 包**外面**：
@@ -222,17 +319,23 @@ MAX_UPLOAD_SIZE=2097152
   商城前台的全局路由守卫已是唯一权威判断，
   但各页面里还留着早期手写的 `onMounted` 登录判断（现在属于冗余代码，可删）；
 - JWT 存 localStorage、无 refresh token；
-  部署为 HTTP，无 HTTPS，安全响应头已配但 HSTS 仍注释着（等 HTTPS 终结后再开）；
-- compose 把 backend 的 8000 端口直接映射到宿主机（方便用 `/docs` 调试），
-  因此 entrypoint 里的 `--forwarded-allow-ips='*'` 是有折扣的信任：
-  能直连 8000 的客户端可以伪造 `X-Forwarded-For`。生产应去掉该端口映射，
-  或把 `*` 收紧成 nginx 所在网段；
+  仓库里给了 HTTPS 的通路（`docker-compose.tls.yml` + Caddy 自动签发续期），
+  但**当前这份 demo 是不是真的跑在 HTTPS 上取决于部署时填没填 `DOMAIN`**——
+  没域名就是纯 HTTP。另外 nginx 里的 HSTS 仍是注释状态，等真在 TLS 后面终结后再开；
+- **本地** compose 把 backend 的 8000 直接映射到宿主机（方便看 `/docs`），
+  而 entrypoint 默认 `--forwarded-allow-ips='*'`，所以本地那套是有折扣的信任：
+  能直连 8000 的客户端可以伪造 `X-Forwarded-For`。生产路径上这两个口子都收掉了
+  （`deploy/bootstrap.sh` 写 `API_BIND=127.0.0.1`，prod 层把信任范围收成 Docker 网段），
+  由 `deploy/check-env.sh` 在启动前断言——但这是「部署脚本保证」，不是「配置文件保证」，
+  手写 `docker compose up` 还是可能漏；
 - 缓存只做了 Redis 单级 + 进程内单飞：Redis 挂掉的降级期内读请求会直接压到 MySQL，
   多副本部署时单飞也只在进程内生效（要彻底解决得用分布式单飞 + 本地多级缓存）；
 - 限流是固定窗口，窗口边界可能出现两倍突发；也没有按用户等级/接口成本做差异化配额；
 - 告警规则写好了，但没有接通知渠道（Alertmanager / 钉钉机器人），
   也没有做指标的长期存储与容量规划；
-- 模型缓存首次启动需联网从 ModelScope 下载（约 100MB）；
+- 模型缓存首次启动需联网从 ModelScope 下载（约 100MB）。部署脚本会把它**提前**
+  下好（`python -m app.ai.warmup`），但这件事本身没被绕过：国内小带宽机器上
+  第一次部署仍要等几分钟，网络不通就是起不来；
 - 上传做了扩展名白名单 + 文件头（魔数）校验，但魔数挡不住精心构造的多格式文件，
   彻底的做法是解码后重新编码再落盘；商品图仍存本地盘，生产应上对象存储。
 
@@ -246,6 +349,12 @@ MAX_UPLOAD_SIZE=2097152
 > 改个后缀传脚本会被拒；限流从「只有三个接口」变成**全站兜底 + 分接口配额**；
 > 缓存补了**击穿 / 穿透 / 雪崩**三道防护；加了 **6 条告警规则 + Grafana 看板**；
 > 10 个端到端用例**进了 CI**。
+>
+> 部署这一轮补掉的：`deploy/bootstrap.sh` 一条命令从裸机到可访问（含装 Docker、
+> 生成随机密钥、预热模型）；`deploy/check-env.sh` 把「漏配但照样能跑起来」的配置
+> 挡在启动前；`deploy/smoke.sh` 从用户入口走一遍关键链路；`docker-compose.prod.yml`
+> 要求密钥必须显式给值并加日志轮转；`docker-compose.tls.yml` 用 Caddy 自动签发并
+> 续期证书。
 
 ## 运行测试
 

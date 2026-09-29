@@ -169,6 +169,94 @@ jobs:
         working-directory: ${{ matrix.app }}
         run: npm run build
 
+  # 镜像与编排校验。
+  #
+  # 之前 CI 只跑 python / npm，Dockerfile 写错、compose 变量拼错、nginx 配置语法错
+  # 全都发现不了 —— 要等到真正部署那一刻才炸，而那正是最不该出问题的时刻。
+  # 这个 job 把「镜像能不能构建出来」和「三个 compose 文件能不能合起来解析」变成
+  # 每次提交都验一遍的事。
+  docker:
+    name: 镜像构建与编排校验
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 部署脚本是 sh/bash，本地开发在 Windows 上根本跑不到，只有 CI 能守住语法。
+      - name: 部署脚本语法检查
+        run: |
+          for f in deploy/*.sh; do
+            echo "== $f"
+            bash -n "$f"
+          done
+
+      - name: 校验三个 compose 文件的合并结果
+        # DOMAIN 必须有值：tls 层用了 ${DOMAIN:?...}，空值会让 compose 直接失败
+        # ——这正是我们想要的行为，CI 这里显式给一个值来验证「给了值能过」。
+        env:
+          DOMAIN: mall.example.com
+        run: |
+          cp .env.example .env
+          docker compose -f docker-compose.yml config -q
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml config -q
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+                         -f docker-compose.tls.yml config -q
+
+      # 下面两步是「反向验证」：故意喂一份坏配置，断言它**必须**被拒绝。
+      # 少了这一步，校验逻辑可能只是在一直返回 0，而 CI 永远绿。
+      - name: 反向验证 · prod 层在密钥为空时必须拒绝启动
+        env:
+          DOMAIN: mall.example.com
+        run: |
+          cp .env.example .env
+          sed -i 's/^JWT_SECRET_KEY=.*/JWT_SECRET_KEY=/' .env
+          if docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+               config -q 2>/dev/null; then
+            echo "::error::JWT_SECRET_KEY 为空时 prod 层没有拒绝"
+            exit 1
+          fi
+          echo "已确认：空密钥会被 prod 层拒绝"
+
+      - name: 反向验证 · check-env.sh 必须拦住示例配置
+        run: |
+          cp .env.example .env
+          if bash deploy/check-env.sh >/dev/null 2>&1; then
+            echo "::error::check-env.sh 放过了 .env.example 里的示例密钥"
+            exit 1
+          fi
+          echo "已确认：示例配置会被 check-env.sh 拦下"
+
+      - name: 正向验证 · 换成随机密钥后 check-env.sh 必须通过
+        run: |
+          sed -i "s/^JWT_SECRET_KEY=.*/JWT_SECRET_KEY=$(openssl rand -hex 32)/" .env
+          sed -i "s/^MYSQL_ROOT_PASSWORD=.*/MYSQL_ROOT_PASSWORD=$(openssl rand -hex 16)/" .env
+          bash deploy/check-env.sh
+
+      - uses: docker/setup-buildx-action@v3
+
+      # 后端的依赖里带 sentence-transformers / torch，镜像接近 2GB；
+      # 首次构建慢，之后靠 GHA 层缓存基本只重建 COPY 那几层。
+      - name: 构建后端镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: false
+          tags: online-mall-backend:ci
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=min
+
+      - name: 构建前端与 nginx 镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: web/Dockerfile
+          push: false
+          tags: online-mall-web:ci
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=min
+
   # 端到端冒烟：真浏览器打开真页面。
   #
   # 单独一个 job 而不是塞进 frontend：它需要完整栈（MySQL + Redis + API + 两个前端），

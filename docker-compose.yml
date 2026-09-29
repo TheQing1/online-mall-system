@@ -1,6 +1,11 @@
 # API 与 worker 共用的环境变量。用 YAML 锚点是因为这两份配置必须完全一致——
 # 复制粘贴一旦漂移（比如只在 API 上改了 Redis 地址），会变成很难查的怪问题。
 x-backend-env: &backend-env
+  # 运行环境。prod override 会设成 production，此时启动自检不通过就直接拒绝启动
+  # （例如 JWT_SECRET_KEY 还是示例默认值），而不是静默地带着假密钥裸奔。
+  # 变量名用 MALL_ENV 而不是 ENVIRONMENT：后者太常见，宿主机上随便一个同名变量
+  # 都会悄悄改变容器行为。
+  ENVIRONMENT: ${MALL_ENV:-development}
   MYSQL_HOST: mysql
   MYSQL_PORT: "3306"
   MYSQL_USER: root
@@ -62,6 +67,10 @@ services:
       # 定时任务交给下面的 worker 服务，API 进程不再自己跑——
       # 这样 API 可以放心多副本，任务仍然只有一个执行者。
       RUN_BACKGROUND_TASKS: "false"
+      # 信任哪些来源的 X-Forwarded-For。默认 '*' 只适合「backend 不直接对外」的场景；
+      # 本地 compose 为了能开 /docs 把 8000 映射到了宿主机，所以这里是有折扣的信任。
+      # prod override 会收紧成 Docker 网段。
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-*}
     volumes:
       - ./backend/static/products:/app/static/products
       # 向量库与 Embedding 模型缓存。刻意放在 /app/data 而不是 app/ 包内部：
@@ -74,7 +83,11 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      # 对外调试端口（/docs、/metrics）。默认绑 0.0.0.0 是为了本地开发方便；
+      # 生产用 API_BIND=127.0.0.1，只留宿主机可访问，公网扫不到 /docs。
+      # 这里用变量而不是在 docker-compose.prod.yml 里重写 ports：compose 对 ports
+      # 是「合并」而不是「替换」，两处都写会变成同一端口发布两次直接报错。
+      - "${API_BIND:-0.0.0.0}:${API_PORT:-8000}:8000"
     # 镜像里已有 HEALTHCHECK，这里显式覆盖一份以便在 `docker compose ps` 里直接看到状态。
     # 镜像内没有 curl，复用 /health 的 python 单行探测。
     healthcheck:
@@ -88,7 +101,11 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 90s
+      # 首次启动要跑迁移 + 种子数据；如果没做模型预热，种子里的向量同步还会去下
+      # 100MB 的 BGE 模型，几分钟都正常。start_period 给足，避免刚起来就被标成
+      # unhealthy，连带 web 服务（depends_on: service_healthy）一起卡住。
+      # 正常部署走 deploy/bootstrap.sh，预热过之后这一步只需十几秒。
+      start_period: 300s
 
   # 定时任务 worker：只跑订单超时关单，不对外提供服务。
   # 与 backend 用同一个镜像，只是换个入口（python -m app.core.tasks）。
@@ -119,7 +136,10 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "80:80"
+      # 对外的 HTTP 端口。默认直接占 80；叠加上 deploy/docker-compose.tls.yml
+      # （Caddy 终结 TLS）时，把 WEB_BIND / WEB_HTTP_PORT 改成 127.0.0.1 / 8080，
+      # 让 80 和 443 交给 Caddy，而 nginx 仍只在宿主机内部可达（方便直接排查问题）。
+      - "${WEB_BIND:-0.0.0.0}:${WEB_HTTP_PORT:-80}:80"
 
   # ---- 可观测性（可选，默认不启动）----
   # 起法：docker compose --profile observability up -d

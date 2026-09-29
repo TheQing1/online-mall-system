@@ -1,0 +1,66 @@
+# 生产加固层：叠在 docker-compose.yml 之上，不影响「clone 下来直接跑」的体验。
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# 嫌麻烦就用 deploy/bootstrap.sh，它自动带上这一层并把示例密钥换成随机值。
+#
+# 这一层只做「本地图省事、对外必须收紧」的事，一共四件：
+#   1. 【硬性】数据库口令与 JWT 密钥必须显式给值，缺了直接报错退出，不落到默认值
+#   2. 【硬性】开 production 自检 —— 密钥没换、格式不对，容器拒绝启动
+#   3. 【安全】把信任的 X-Forwarded-For 来源从 * 收紧到 Docker 网段，
+#      关掉「伪造来源 IP，绕过按 IP 限流」这条路
+#   4. 【运维】给所有服务加日志轮转：docker 的 json 日志默认无限增长，
+#      demo 挂几个月能把 20G 系统盘写满
+#
+# 关于端口：生产还需要把 web 的 80 和 backend 的 8000 收到安全范围。
+# 那件事**不在这里做**，因为 compose 对 ports 是「合并」而不是「替换」，
+# 两个文件都写会变成同一端口被发布两次而直接报错。端口统一由根目录 .env 的
+# API_BIND / WEB_BIND / WEB_HTTP_PORT 控制，deploy/check-env.sh 逐条校验。
+
+x-log-rotation: &log-rotation
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  mysql:
+    logging: *log-rotation
+    environment:
+      # `:?` 表示「没给值就让 compose 直接失败」。生产用真实口令，
+      # 而不是悄悄回落到 mall_root_123 这种谁都知道的默认值。
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?生产部署必须设置 MYSQL_ROOT_PASSWORD（见 .env.example）}
+
+  redis:
+    logging: *log-rotation
+
+  backend:
+    logging: *log-rotation
+    environment:
+      # 覆盖 base 里的 ${MALL_ENV:-development}
+      ENVIRONMENT: production
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?生产部署必须设置 JWT_SECRET_KEY（见 .env.example）}
+      # Docker 默认 bridge 网段在 172.16.0.0/12 内，nginx 容器的来源 IP 落在这里。
+      # 收窄之后，只有来自容器网络的请求带的 X-Forwarded-For 才被 uvicorn 采信。
+      FORWARDED_ALLOW_IPS: 172.16.0.0/12
+
+  worker:
+    logging: *log-rotation
+    environment:
+      ENVIRONMENT: production
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?生产部署必须设置 JWT_SECRET_KEY（见 .env.example）}
+
+  web:
+    logging: *log-rotation
+
+  prometheus:
+    logging: *log-rotation
+
+  grafana:
+    logging: *log-rotation
+
+# 刻意没做的事（都写在 README「已知不足」里，不在这里假装做了）：
+#   - 没有把 backend 扩到多副本：向量库和 BM25 索引都是进程/本地卷状态，
+#     多副本得先把这层做成共享服务，属于架构级改动；
+#   - 没有接 Alertmanager / 钉钉：告警规则写好了，但通知渠道要额外服务；
+#   - 没有上 CDN / 对象存储：商品图仍落在本地盘。
