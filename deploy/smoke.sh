@@ -163,6 +163,8 @@ chat_resp="$(curl -sS --max-time 90 -X POST "${BASE_URL}/api/v1/ai-chat/chat" \
   -H 'Content-Type: application/json' \
   -d '{"session_id":"smoke-test-0001","message":"你们支持七天无理由退货吗？"}' 2>/dev/null || true)"
 
+# 注意 `[ERROR]` 要写成 `[[]ERROR]`：case 的模式是 glob，`[ERROR]` 会被当成
+# 「匹配 E/R/O 里任意一个字符」的字符集，几乎什么都能匹配上。
 case "$chat_resp" in
   *'"type": "text"'* | *'"type":"text"'*)
     ok "AI 客服流式应答（检索 + 大模型都在工作）"
@@ -170,7 +172,7 @@ case "$chat_resp" in
   *DEEPSEEK_API_KEY*)
     soft "AI 客服未配置 DEEPSEEK_API_KEY：接口本身是通的，但只会返回配置提示。演示 AI 能力必须补上这个 Key"
     ;;
-  *'[ERROR]'*)
+  *'[[]ERROR]'*)
     bad "AI 客服返回错误：$(printf '%s' "$chat_resp" | head -c 200)"
     ;;
   *)
