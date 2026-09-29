@@ -22,12 +22,15 @@ COPY backend/alembic.ini /app/alembic.ini
 COPY backend/static /app/static
 COPY backend/docker-entrypoint.sh /app/docker-entrypoint.sh
 
-# 非 root 运行。uid/gid 1000 取常见 Linux 宿主机首个普通用户的编号，
-# 让 bind mount 进来的 ./backend/static/products（商品图上传目录）更可能直接可写；
-# 若宿主机目录归属别的 uid，需要在宿主机上 chown 或 chmod 后再启动。
-# /app/data 是 compose 中 mall-data 卷的挂载点：新建命名卷会继承镜像内该目录的
-# 属主与权限，所以必须在这里 chown，否则容器首次下载 BGE 模型时会因无写权限崩溃。
-# 注意 backend/static/products 被 .dockerignore 排除，这里显式 mkdir 保证目录存在。
+# 非 root 运行。uid/gid 1000 只是「一个固定的非特权编号」，不要求宿主机配合。
+#
+# /app/data 与 /app/static/products 分别是 mall-data、mall-uploads 两个命名卷的
+# 挂载点。命名卷首次创建时，Docker 会用镜像里这两个目录的内容**与属主**做初始化，
+# 所以必须在这里 chown，否则容器首次下载 BGE 模型、或者后台传商品图时会因为
+# 没有写权限失败。
+# 商品图目录以前是 bind mount 到仓库里的，容器能不能写取决于宿主机那个目录归谁
+# （用 root clone 再 sudo 部署就是 root:root，写不进去），改成命名卷之后这一类
+# 问题整体消失了——这也是为什么镜像里要带上种子商品图（约 0.5MB）。
 RUN groupadd --gid 1000 appuser \
     && useradd --uid 1000 --gid 1000 --home-dir /app/data --shell /usr/sbin/nologin appuser \
     && chmod +x /app/docker-entrypoint.sh \

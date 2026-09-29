@@ -72,7 +72,14 @@ services:
       # prod override 会收紧成 Docker 网段。
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-*}
     volumes:
-      - ./backend/static/products:/app/static/products
+      # 商品图上传目录。用命名卷而不是 bind mount 挂 ./backend/static/products，
+      # 原因是容器以 uid 1000 (appuser) 运行，而宿主机上那个目录的属主取决于
+      # 「谁 clone 的仓库」：root clone 再 sudo 部署 → root:root 755 → 容器写不进去，
+      # 后台传商品图直接 500，而且报错位置离原因很远（只看到一个 Permission denied）。
+      # 命名卷由 Docker 用镜像里的内容初始化，**连属主一起**复制，因此没有这个问题；
+      # 代价是上传的图不再直接落在仓库目录里，要看/备份得通过
+      # `docker compose cp` 或 `docker run --rm -v ...:/x alpine ls /x`。
+      - mall-uploads:/app/static/products
       # 向量库与 Embedding 模型缓存。刻意放在 /app/data 而不是 app/ 包内部：
       # 挂在 /app/app/models 会遮蔽 app/models/*.py，重建镜像后容器里跑的
       # 仍是 volume 中的旧代码。首次启动会自动下载模型（约 100MB）。
@@ -180,6 +187,7 @@ services:
 volumes:
   mysql-data:
   mall-data:
+  mall-uploads:
   redis-data:
   prometheus-data:
   grafana-data:

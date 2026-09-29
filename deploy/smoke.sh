@@ -180,6 +180,41 @@ case "$chat_resp" in
     ;;
 esac
 
+# ---- 6. 商品图上传目录必须可写 ----
+# 补这一条是因为它曾经就是个真问题：上传目录以前是 bind mount 到仓库里的
+# `backend/static/products`，而容器以 uid 1000 运行、宿主机那个目录的属主却取决于
+# 「谁 clone 的仓库」——用 root clone 再 sudo 部署就是 root:root 755，容器写不进去，
+# 后台传商品图直接 500。后来改成命名卷解决了，但「卷的属主对不对」同样只有真传一次
+# 文件才知道，所以放进自检。
+# 代价：每跑一次自检会在上传卷里留下一个 1x1 的 PNG（几十字节），可以忽略。
+if [ -n "${admin_token:-}" ]; then
+  if command -v base64 >/dev/null 2>&1; then
+    printf '%s' \
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' \
+      | base64 -d >"$TMP_DIR/pixel.png" 2>/dev/null || : >"$TMP_DIR/pixel.png"
+
+    if [ -s "$TMP_DIR/pixel.png" ]; then
+      upload_code="$(curl -sS -o "$BODY" -w '%{http_code}' --max-time 30 \
+        -X POST "${BASE_URL}/api/v1/admin/upload" \
+        -H "Authorization: Bearer $admin_token" \
+        -F "file=@$TMP_DIR/pixel.png;type=image/png" 2>/dev/null || echo 000)"
+
+      if [ "$upload_code" = "200" ] && grep -q '/static/products/' "$BODY"; then
+        ok "后台图片上传（上传目录可写）"
+        uploaded="$(sed -n 's/.*"url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$BODY")"
+        [ -n "$uploaded" ] && expect_get "刚上传的图片能取回" "$uploaded" 200
+      else
+        bad "后台图片上传失败（HTTP $upload_code）：$(head -c 200 "$BODY")"
+        bad "  → 多半是容器里的上传目录不可写，检查 mall-uploads 卷的属主"
+      fi
+    else
+      soft "base64 解码没成功，跳过上传检查"
+    fi
+  else
+    soft "没有 base64 命令，跳过上传检查"
+  fi
+fi
+
 echo
 echo "==> 自检结果：通过 $pass 项，失败 $fail 项，警告 $warn 项"
 if [ "$fail" -gt 0 ]; then
