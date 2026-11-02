@@ -165,6 +165,17 @@ jobs:
         working-directory: ${{ matrix.app }}
         run: npm run lint
 
+      # 单元测试（vitest）。目前只有 frontend 配了单测，用 hashFiles 判断，
+      # 避免 admin 还没加单测时这一步直接报「找不到脚本」。
+      #
+      # 补这一步的原因：前端原先只有 Playwright 端到端，而 e2e 只验证
+      # 「页面能打开」。SSE 分帧状态机、拦截器错误分流这类纯逻辑
+      # 既进不了 e2e（不涉及 DOM），也就完全没人守——直到被线上问题发现。
+      - name: 单元测试
+        if: hashFiles(format('{0}/vitest.config.mjs', matrix.app)) != ''
+        working-directory: ${{ matrix.app }}
+        run: npm run test:unit
+
       - name: 构建
         working-directory: ${{ matrix.app }}
         run: npm run build

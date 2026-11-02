@@ -17,12 +17,19 @@
 - **检索效果可量化**：自建 22 篇知识文档 + **51 条评测集**，在同一套评测、同一条线上
   代码路径上测出三级提升：纯向量 recall@1 84.3% → BM25 混合检索 90.2% →
   加交叉编码器重排 **92.2%，且 recall@3 达到 100%**。
-- **工程化**：113 个 pytest 用例（覆盖率 77%）+ 10 个 Playwright 端到端用例
-  （真浏览器、断言控制台零报错）；Alembic 迁移**可回滚**（有真实 MySQL 往返用例）；
+- **工程化**：118 个 pytest 用例（覆盖率 77%）+ 24 个前端 vitest 单测 +
+  11 个 Playwright 端到端用例（真浏览器、断言控制台零报错、含移动端视口）；
+  Alembic 迁移**可回滚**（有真实 MySQL 往返用例）；
   GitHub Actions 一条流水线跑完全部检查。
+- **移动端可用**：全站响应式（自适应网格 + 媒体查询），375px 视口下有专门的
+  e2e 断言「无横向溢出」与「AI 客服窗完整落在视口内」——这些用桌面视口永远测不出来。
 - **抗读压力与防滥用**：商品读路径走 Redis 缓存（50 并发实测 P99 51ms → **23ms**），
   击穿 / 穿透 / 雪崩各有对应防护；全站限流 + 分接口配额；关单任务用分布式锁串行化
   并拆成独立 worker；Redis 不可用时只丢缓存和限流，不影响业务。
+- **AI 链路可观测**：检索 / 重排 / 首 token / token 消耗分四段埋点，每轮问答打一条
+  结构化日志（`rewritten_query`、`retrieval_ms`、`best_score`、`ttft_ms`、
+  `prompt_tokens`…），**一次问答即可回答「慢在哪、为什么答不上、花了多少钱」**；
+  配 4 块 Grafana 面板与 3 条 AI 专属告警，专门盯「不报错但答得越来越差」的静默劣化。
 - **交付**：一条命令从裸机部署到线上（校验配置 → 构建 → 迁移播种 → 预热模型 → 起服务 →
   自检），有域名则自动签发并续期 HTTPS 证书。
 
@@ -205,8 +212,8 @@ sudo bash deploy/reset-demo.sh                # 被写乱后一键恢复初始�
 
 ```bash
 cd backend && pip install -r requirements-dev.txt
-pytest                                    # 96 个自包含用例：不需要 MySQL / Redis / 联网
-pytest -m "mysql or redis" -v             # 17 个集成用例：真实 MySQL 与 Redis
+pytest                                    # 100 个自包含用例：不需要 MySQL / Redis / 联网
+pytest -m "mysql or redis" -v             # 18 个集成用例：真实 MySQL 与 Redis
 pytest --cov=app --cov-report=term-missing
 ruff check .                              # 静态检查
 
@@ -214,14 +221,28 @@ cd frontend && npm run lint && npm run build
 cd admin    && npm run lint && npm run build
 ```
 
+前端有 **24 个 vitest 单元测试**，覆盖两块最容易坏、又最不容易被 e2e 覆盖的胶水逻辑：
+**SSE 流式分帧状态机**（跨 chunk 截断、多帧粘包、新旧协议混用、错误帧）和
+**axios 拦截器的错误分流**（哪些错误弹全局提示、401 何时跳登录、登录接口为何要例外）。
+这两块一旦出错，表现是「AI 回答缺字」「登录失败把表单冲掉」，用户在真实环境里很难复现。
+
+```bash
+cd frontend && npm run test:unit      # 24 个用例，约 1 秒
+```
+
 端到端用例跑在**生产构建产物**上，覆盖首页渲染、商品详情、搜索、登录、购物车、
 AI 客服面板、后台登录与看板，并断言**控制台没有任何报错**——组件没注册、
 `v-loading` 指令没注册、资源 404、按需引入后样式没进来，都是它抓出来的。
 
+另有一个 **移动端 project（375×812）**，断言「没有横向溢出」和「AI 客服窗完整落在视口内」。
+加它的直接原因是：全站曾经一条 `@media` 都没有，固定 4 列网格和写死 400px 宽的客服窗
+在手机上会横向溢出——而桌面端 1440 视口永远发现不了。
+
 ```bash
 # 需要先起三个服务：后端 :8000（配额调大，否则 E2E 自己会撞上限流）、
 # 商城 :5173、后台 :5174（都跑 npm run build && npm run preview）
-cd frontend && npm run test:e2e
+cd frontend && npm run test:e2e                      # 全部
+cd frontend && npm run test:e2e -- --project=mall-mobile  # 只跑移动端
 ```
 
 CI 里有一个独立的 `e2e` 任务跑这套用例（起 MySQL + Redis + API + 两个前端），
@@ -240,7 +261,7 @@ CI 里有一个独立的 `e2e` 任务跑这套用例（起 MySQL + Redis + API +
 │  ├─ app/ai            # RAG 链路（retriever / reranker / rag / indexer）
 │  ├─ app/core          # 配置/安全/缓存/限流/锁/日志/指标/后台任务/商品目录
 │  ├─ alembic           # 数据库迁移
-│  ├─ tests             # 113 个 pytest 用例
+│  ├─ tests             # 118 个 pytest 用例
 │  ├─ loadtest/         # Locust 压测脚本
 │  └─ static/products/  # 商品图（文件名 = 商品 slug）
 ├─ deploy/              # 部署脚本、配置校验、部署自检、Caddyfile
@@ -255,14 +276,18 @@ CI 里有一个独立的 `e2e` 任务跑这套用例（起 MySQL + Redis + API +
 
 - 重排只在 CPU 上跑（每条问题约 0.6 秒），也没做重排结果缓存；上生产要么换 GPU，
   要么换更小的 cross-encoder；
-- 前端无 TypeScript、无单元测试；端到端只覆盖「页面能用」这一层，
-  组件内部逻辑仍没有单测兜着；
+- 前端仍是纯 JS、没有 TypeScript；单测覆盖了 SSE 分帧与拦截器两块核心胶水逻辑，
+  但**页面组件内部（SKU 匹配、表单校验）仍没有单测兜着**，端到端也只到「页面能用」这层；
 - JWT 存 localStorage、无 refresh token；HTTPS 取决于部署时填没填 `DOMAIN`，
   没域名就是纯 HTTP，nginx 里的 HSTS 也仍是注释状态；
 - 缓存是 Redis 单级 + 进程内单飞：Redis 挂掉的降级期内读请求会直接压到 MySQL，
   多副本时单飞只在进程内生效；
 - 限流是固定窗口，窗口边界可能出现两倍突发，也没有按用户等级/接口成本做差异化配额；
 - 告警规则写好了，但没接通知渠道（Alertmanager / 钉钉），也没有指标长期存储；
+- **AI 链路有指标但没有 trace 采样**：一次问答的日志是完整的一行，但跨多次问答的
+  会话级分析（例如「同一个用户反复问同一个问题」）还没有做；
+- **BGE 模型冷启动要 7~9 秒**（首个请求包含模型加载），目前只靠部署脚本预热缓解，
+  没有做「模型就绪才接流量」的 readiness 区分；
 - 模型缓存首次启动需联网从 ModelScope 下载约 100MB，网络不通就是起不来；
 - 上传做了扩展名白名单 + 文件头（魔数）校验，但魔数挡不住精心构造的多格式文件；
   商品图仍存本地盘，生产应上对象存储。

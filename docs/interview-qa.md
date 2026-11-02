@@ -3,7 +3,7 @@
 > 配套项目：基于 LangChain + RAG + DeepSeek 的 B2C 在线商城
 > 技术栈：Vue3 + Element Plus + Vite + Pinia / FastAPI + SQLAlchemy 2.0 + Pydantic v2 /
 > MySQL 8.0 / ChromaDB / LangChain 0.3.x / BGE `bge-small-zh-v1.5`（本地）/ DeepSeek / JWT + bcrypt /
-> Alembic / Docker Compose + Nginx / pytest（113 个用例，含真实 MySQL、Redis 与真实向量模型）
+> Alembic / Docker Compose + Nginx / pytest（118 个用例，含真实 MySQL、Redis 与真实向量模型）
 
 > ⚠️ **本文档的每一条回答都对照当前代码校验过。**
 > 如果你改动了实现（例如换了向量库、调整了 `k` 或阈值、加了限流），
@@ -51,7 +51,7 @@
 
 `api/` 只做参数校验、调用 service、返回结果；`services/` 承载业务规则（下单、库存扣减、状态流转、索引同步）；`models/` 是 SQLAlchemy 模型；`schemas/` 是 DTO；`core/` 放配置、DB、安全、依赖、后台任务。
 
-好处：接口薄、逻辑可复用（前台与后台共用 `order_service`）、可测试。**这也是能写出 113 个测试的前提**——业务逻辑不依赖 FastAPI 的请求对象。
+好处：接口薄、逻辑可复用（前台与后台共用 `order_service`）、可测试。**这也是能写出 118 个测试的前提**——业务逻辑不依赖 FastAPI 的请求对象。
 
 ### 5. 你的具体贡献
 
@@ -419,13 +419,58 @@ WebSocket 需要协议升级、连接池、心跳保活、断线重连，复杂�
 
 ### 37. Vue3 用了哪些特性
 
-组合式 API（`ref` / `computed` / `watch`）、`<script setup>`、路由级懒加载（`import()`）、Pinia setup store；后台大量使用 Element Plus 的表格/表单/弹窗/消息组件。
+组合式 API（`ref` / `computed` / `watch`）、`<script setup>`、路由级懒加载（`import()`）、
+Pinia setup store；后台大量使用 Element Plus 的表格/表单/弹窗/消息组件。
+
+### 37b. 前端有测试吗 / 前端代码怎么保证质量
+
+有，而且是**分层**的，两层管的是完全不同的东西（前端一共 24 个 vitest 单测 + 11 个 e2e）：
+
+**单测（vitest + jsdom）测「纯逻辑」**，重点是两块最容易坏、又最难手工复现的逻辑：
+
+1. **SSE 流式分帧状态机**（`stores/chat.js`，14 个用例）。这是前端最复杂的一段：
+   要处理「一个 TCP 包里装半个 JSON」「一行被切在两个 chunk 之间」「一个 chunk 里
+   粘了多帧」「新协议 JSON 帧与旧协议 `[DONE]`/`[ERROR]` 文本帧混用」。
+   这类 bug 的表现是「AI 回答缺字/串字」——用户能感觉到但说不清，浏览器里也无法
+   稳定构造。用单测把 chunk 按任意位置切开来验证，是最合适的办法。
+2. **axios 拦截器错误分流**（`api/client.js`，10 个用例）。全局弹提示、401 跳登录、
+   以及**哪些接口必须排除在全局处理之外**（登录失败返回 401 但那是「密码错」不是
+   「会话过期」，走全局跳转会整页刷新、把用户填的表单冲掉）。
+
+**e2e（Playwright）测「页面能不能用」**，跑在**生产构建产物**上，断言控制台零报错。
+它抓的是单测抓不到的那类问题：组件没注册、`v-loading` 指令没注册、资源 404、
+按需引入后样式没进来——这些在构建阶段都不报错。
+
+> 一个真实教训：**断言必须能失败**。AI 客服那条 e2e 原先的选择器是
+> `button:has(.el-icon)`，而真实的触发器是个 `<div>`，于是它每次都点到了导航栏的
+> 搜索按钮——用例一直是绿的，AI 客服却从没被打开过。修法是加 `data-testid` 锚点，
+> 并断言「窗口真的可见」而不只是「点击没报错」。
+
+### 37c. 移动端怎么保证的（一个反直觉的点）
+
+**桌面端视口是测不出移动端问题的。** 这个项目曾经全站一条 `@media` 都没有：
+首页写死 `repeat(4, 1fr)`、AI 客服窗写死 `width: 400px`——在 375px 手机上，
+客服窗右边一截直接落在视口外，连关闭按钮都点不到。而 1440 视口下一切正常。
+
+做法：
+1. 网格改 `repeat(auto-fill, minmax(220px, 1fr))`——不写断点，列数随容器自动增减，
+   比堆一堆媒体查询更稳；
+2. 客服窗改 `width: min(400px, calc(100vw - 32px))`，几何约束而不是魔法数字；
+3. 加一个 **375×812 的 Playwright project**，断言两件桌面端永远不会测的事：
+   `document.documentElement.scrollWidth <= clientWidth`（无横向溢出），
+   以及客服窗的 `boundingBox` 完整落在视口内。
+
+**验证过断言确实有效**：把样式改回写死 400px 重跑，用例报出
+「客服窗左边不应超出视口：实际 -41px」——这才说明它不是一条永远绿的空断言。
 
 ---
 
 ## 七、测试、CI 与部署
 
-### 38. 测试怎么做的（113 个用例）
+### 38. 测试怎么做的（118 个后端 + 24 个前端单测 + 11 个 e2e）
+
+前端的 24 个 vitest 单测与 11 个 Playwright e2e 见 Q37b/Q37c（它们测的是和
+后端完全不同的东西）。后端 118 个用例的分工：
 
 | 文件 | 覆盖 |
 |---|---|
@@ -441,7 +486,7 @@ WebSocket 需要协议升级、连接池、心跳保活、断线重连，复杂�
 | `test_mysql_integration.py` | **真实 MySQL/InnoDB**：外键、并发防超卖、并发支付幂等（连不上时自动 skip） |
 | `test_redis_features.py` | **真实 Redis**：缓存读写与失效、限流 429、分布式锁互斥（连不上时自动 skip） |
 
-工程要点：默认 96 个用例完全自包含——每个用例一个独立 SQLite 文件、覆盖 `get_db` 依赖、
+工程要点：默认 100 个用例完全自包含——每个用例一个独立 SQLite 文件、覆盖 `get_db` 依赖、
 假 Embedding（确定性哈希向量），**不需要 MySQL 也不需要联网**，所以 CI 跑得很快。
 需要真实数据库/模型的用例用 marker 标注并自动 skip，不会让 CI 变红。
 
@@ -482,13 +527,16 @@ GitHub Actions，五个 job：
   ——否则 host/口令配错时会得到一个绿色的假通过；
 - **rag-quality**：**手动触发**（`workflow_dispatch`）才跑 `pytest -m rag_quality`。
   它要下载约 100MB 的 BGE 模型，放进每次 push 的流水线会又慢又容易因网络抖动变红；
-- **frontend**：`frontend` / `admin` 矩阵，`npm ci` + `npm run lint` + `vite build`。
-- **e2e**：起 MySQL + Redis + API + 两个前端，再跑 10 个 Playwright 用例。这条原来
-  只在我本地手动跑，等于没在保护仓库；现在每次 push 都会真开一个浏览器点一遍。
+- **frontend**：`frontend` / `admin` 矩阵，`npm ci` + `npm run lint` + **`npm run test:unit`**
+  （vitest）+ `vite build`。单测那一步用 `hashFiles` 判断有没有 vitest 配置，
+  admin 还没接单测时不会报「找不到脚本」；
+- **e2e**：起 MySQL + Redis + API + 两个前端，再跑 **11 个 Playwright 用例**
+  （8 个桌面 + 3 个 375px 移动端）。这条原来只在我本地手动跑，等于没在保护仓库；
+  现在每次 push 都会真开一个浏览器点一遍。
   它用 `RATE_LIMIT_API=0` 关掉全站限流、`SEED_SKIP_VECTOR=1` 跳过 100MB 模型下载，
   两个都是为了「别把被测对象本身的保护机制和重量算进 E2E」。
 
-因为默认那 96 个用例跑在 SQLite + 假向量上，backend job **不需要 MySQL、也不下载
+因为默认那 100 个用例跑在 SQLite + 假向量上，backend job **不需要 MySQL、也不下载
 100MB 模型**，所以跑得很快；需要真实数据库/模型的用例各自由上面两个独立 job 负责。
 
 ruff 刻意只开 `F`（如 F821 undefined-name）和 `E9`：**只拦「一定是 bug」的规则、不引风格
@@ -623,7 +671,7 @@ JSON 并带 request_id、也暴露了 Prometheus 指标，还配了 6 条告警�
   且评测跑的是生产同一条代码路径；另有四个实测得出的负向结论（BGE 前缀有害、
   BM25Okapi 的 IDF 会变负、模型缓存命名撞车、简单评测集会虚高分数）；
 - **并发正确性经过真实数据库验证**：8 线程抢 3 件恰好成交 3 单、5 次并发支付恰好成功 1 次，失败原因被严格限定为业务错误；
-- **工程化**：分层架构、依赖注入、Alembic 幂等迁移（可回滚）、多阶段非 root 镜像、Compose + Nginx、113 个测试（覆盖率 77%）、CI；
+- **工程化**：分层架构、依赖注入、Alembic 幂等迁移（可回滚）、多阶段非 root 镜像、Compose + Nginx、118 个测试（覆盖率 77%）、CI；
 - **清楚边界**：知道上线还差什么、瓶颈在哪、怎么扩展。
 
 ### 45. 如果流量上来先瓶颈在哪
@@ -775,12 +823,53 @@ API 进程用 `RUN_BACKGROUND_TASKS=false` 关掉它，所以 backend 可以放�
 配上 6 条告警规则（5xx 比例 / P99 / Redis 降级 / 限流激增 / 定时任务失败 / 十分钟没流量）
 和一块自动导入的 Grafana 看板，用 `docker compose --profile observability up -d` 起。
 
+**第四类也是最值钱的：AI 链路到底好不好。** 这条链路一开始**一条指标都没有**，
+出问题时只能重启试试——我确实碰上过「跑久了开始答非所问、重启就好」的现象，
+当时完全无法定位。补上埋点后，每轮问答打一条结构化日志：
+
+```json
+{"message": "AI 对话完成", "request_id": "176849c3cec44f85",
+ "rewritten_query": "退货政策是什么？", "rewrite_ms": 2929.0,
+ "retrieval_ms": 9156.4, "hit_count": 3, "best_score": 1.0,
+ "rerank_used": false, "ttft_ms": 1655.6, "total_ms": 14539.4,
+ "prompt_tokens": 402, "completion_tokens": 216, "error": null}
+```
+
+一行日志就能回答三个必问题：
+
+- **慢在哪？** 分四段看：`rewrite_ms` / `retrieval_ms` / `ttft_ms` / `total_ms`。
+  上例里 `retrieval_ms=9156`——那不是检索慢，是 BGE 模型冷启动在加载模型，
+  这就是「答得慢」的真正原因，看一眼就知道，不用猜。
+- **为什么答不上来？** `rag_retrieval_outcome_total{outcome}` 把失败分成四种：
+  `empty_index`（索引没同步）、`all_below_threshold`（阈值过严/知识库缺内容）、
+  `no_candidates`（没召回）、`hit`。**关键是这四者的处置方式完全不同**，
+  混成一个「没结果」，面板看起来正常但永远查不出问题。
+- **花了多少钱？** `llm_tokens_total{kind}` 是成本曲线，`prompt` 和 `completion`
+  分开记（两者单价不一样）。
+
+配套 4 块 Grafana 面板 + 3 条 AI 专属告警（检索空转率 > 30%、LLM 错误率 > 10%、
+首 token P95 > 3s）。这三条专门盯**「不报错但答得越来越差」**的静默劣化——
+这是 AI 应用最危险也最难发现的失效方式。
+
+两个容易踩的坑，我都踩了：
+
+1. **不要按 query 打标签**：那会把 label 基数打到无穷大。看的是**分布**
+   （`rag_best_score` 的 P10/P50/P90），整体左移就说明知识库或模型出问题了。
+2. **埋了还得能看见**：`JsonFormatter` 原来只白名单了 `method/path/status/duration_ms`
+   四个字段，业务字段会被静默丢弃——「埋了点但看不到」比不埋更糟，
+   因为你以为已经有了。
+
 两个细节值得讲：指标标签用**路由模板**而不是原始路径（否则每个商品 id 都是一条时间序列，
 label 基数会炸）；指标是自己用 `prometheus_client` 写的（`prometheus-fastapi-instrumentator`
 8.x 要求 `starlette>=1.0`，和本项目锁的 FastAPI 0.115 冲突），顺便复用了访问日志里
 已经算好的耗时——**计时只做一次，两个消费者**。
 
-**边界**：规则写好了但没接通知渠道；没有长期存储与容量规划。
+> 补一句关于「说了要做，代码里却没做到」：`route_label` 的文档里明确写了
+> 「404 不能回退原始路径，否则 label 基数会炸」，但代码恰恰就回退到了原始路径。
+> 这种**注释与实现矛盾**的地方，是审计时最该优先看的位置——它说明作者知道正确做法，
+> 只是没做到，往往是被别的事情打断了。
+
+**边界**：规则写好了但没接通知渠道；没有长期存储与容量规划；跨会话的 trace 分析还没做。
 
 ### 53. 数据库迁移能回滚吗（一个很容易被问住的点）
 
