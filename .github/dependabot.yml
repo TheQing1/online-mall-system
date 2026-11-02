@@ -38,8 +38,18 @@ updates:
       - dependency-name: "python-multipart"
       # 同一条升级链上的框架核心：单独升任何一个都会造成版本矩阵自相矛盾。
       # 这五项要升就一起升，属于「一次独立的迁移工程」，不适合自动 PR。
+      #
+      # 实测过的反例：fastapi 0.115.0 → 0.115.14（**只是 patch**）看着很安全，
+      # 但 0.115.14 要求 starlette>=0.40.0，而本仓库钉着 starlette==0.38.6，
+      # 于是 `pip install` 直接 ResolutionImpossible：
+      #   Cannot install ... and starlette==0.38.6 because these package versions
+      #   have conflicting dependencies.
+      # 所以 fastapi 连 patch 都要挡——它与 starlette 的版本下限是绑死的。
       - dependency-name: "fastapi"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
       - dependency-name: "sqlalchemy"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "alembic"
