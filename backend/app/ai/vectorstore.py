@@ -44,6 +44,20 @@ def index_generation() -> int:
     return _index_generation
 
 
+def is_index_empty() -> bool:
+    """向量库是否为空。
+
+    单独抽出来是为了让检索层能区分两种「没结果」：
+    - 索引为空（知识库没同步 / 首次启动还没初始化）→ 是配置或启动问题；
+    - 索引非空但一条都没召回 → 是查询或模型问题。
+    这两者的处置方式完全不同，混成一个「空结果」就没法排查了。
+    """
+    try:
+        return get_vectorstore().count() == 0
+    except Exception:
+        return True
+
+
 def _bump_index_generation() -> None:
     global _index_generation
     _index_generation += 1

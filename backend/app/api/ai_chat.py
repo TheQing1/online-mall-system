@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.ai.rag import generate_stream
+from app.ai.rag import ChatTrace, generate_stream
 from app.core.database import get_db, get_session_factory
 from app.core.deps import get_optional_user
 from app.core.ratelimit import rate_limit
@@ -40,13 +40,14 @@ async def chat(
         # 刻意不用请求作用域的 db：流式响应会长期持有连接，客户端断连时
         # 依赖注入还可能并发关闭会话。这里在生成器内部自建自关。
         stream_db: Session = session_factory()
+        trace = ChatTrace()
         try:
             chat_service.add_message(
                 stream_db, request.session_id, "user", request.message, update_title=True
             )
             assistant_parts = []
             async for event in generate_stream(
-                stream_db, request.session_id, request.message
+                stream_db, request.session_id, request.message, trace
             ):
                 if event.text is not None:
                     assistant_parts.append(event.text)
@@ -60,14 +61,23 @@ async def chat(
                 )
         except ValueError as exc:
             # 配置类错误（例如未设置 DEEPSEEK_API_KEY），提示对使用者有意义
+            trace.error = "ValueError"
             yield f"data: [ERROR] {exc}\n\n"
             yield "data: [DONE]\n\n"
         except Exception:
             # 其他异常记日志，不把内部细节泄露给客户端
+            trace.error = "Exception"
             logger.exception("AI 客服流式响应失败")
             yield "data: [ERROR] AI 服务暂时不可用，请稍后再试\n\n"
             yield "data: [DONE]\n\n"
         finally:
+            # 一轮问答一条日志：把改写/检索/生成各阶段的数字串在同一行，
+            # 排查「答得慢」「答非所问」时不用再去拼多条记录。
+            # request_id 由日志 Filter 自动带上，可以据此捞出整条链路。
+            logger.info(
+                "AI 对话完成",
+                extra={"session_id": request.session_id, **trace.as_log_fields()},
+            )
             stream_db.close()
 
     return StreamingResponse(

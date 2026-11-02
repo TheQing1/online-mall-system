@@ -53,6 +53,24 @@ class _RequestIdFilter(logging.Filter):
 
 
 class JsonFormatter(logging.Formatter):
+    """单行 JSON 日志。
+
+    除了固定的几条元信息，还会把 ``extra=`` 里传进来的**业务字段**原样带上
+    （AI 链路的 ``retrieval_ms`` / ``ttft_ms`` / ``prompt_tokens`` 等就靠这个
+    才能落到日志系统里）。此前这里只白名单了 method/path/status/duration_ms
+    四个字段，业务字段会被静默丢弃——那等于「埋了点但看不到」。
+    """
+
+    # LogRecord 自带的属性，不属于业务字段，不能透传
+    _RESERVED = frozenset(
+        {
+            "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
+            "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
+            "created", "msecs", "relativeCreated", "thread", "threadName",
+            "processName", "process", "taskName", "message", "asctime",
+        }
+    )
+
     def format(self, record: logging.LogRecord) -> str:
         payload = {
             "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
@@ -61,9 +79,14 @@ class JsonFormatter(logging.Formatter):
             "request_id": getattr(record, "request_id", "-"),
             "message": record.getMessage(),
         }
-        for key in ("method", "path", "status", "duration_ms"):
-            if hasattr(record, key):
-                payload[key] = getattr(record, key)
+        for key, value in record.__dict__.items():
+            if key in self._RESERVED or key.startswith("_"):
+                continue
+            if key == "request_id":
+                continue
+            # 只放可序列化的标量，避免把对象塞进日志
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                payload[key] = value
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
         return json.dumps(payload, ensure_ascii=False)
@@ -103,7 +126,10 @@ class RequestContextMiddleware:
         request_id = Headers(scope=scope).get("x-request-id") or uuid.uuid4().hex[:16]
         token = bind_request_id(request_id)
         started = time.perf_counter()
-        status_code = 500
+        # 初值刻意用 None 而不是 500：客户端中途断连（例如关掉 AI 客服面板）时
+        # 响应头从未发出，这里若按 500 上报，会把 5xx 错误率抬高到触发
+        # ApiHighErrorRate 告警，把一个正常行为报成事故。
+        status_code = None
 
         async def send_with_request_id(message):
             nonlocal status_code
@@ -116,13 +142,16 @@ class RequestContextMiddleware:
             await self.app(scope, receive, send_with_request_id)
         finally:
             duration_ms = (time.perf_counter() - started) * 1000
+            # 499 是 nginx 对「客户端主动断开」的约定状态码，这里沿用同一语义，
+            # 让断连和真正的服务端错误在指标里可区分。
+            reported_status = status_code if status_code is not None else 499
             observe_metrics(
-                scope.get("method", "UNKNOWN"), scope, status_code, duration_ms / 1000
+                scope.get("method", "UNKNOWN"), scope, reported_status, duration_ms / 1000
             )
             extra = {
                 "method": scope.get("method"),
                 "path": scope.get("path"),
-                "status": status_code,
+                "status": reported_status,
                 "duration_ms": round(duration_ms, 1),
             }
             if duration_ms >= settings.log_slow_request_ms:

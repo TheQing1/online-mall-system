@@ -20,11 +20,13 @@
 import logging
 import math
 import threading
+import time
 from typing import List, Tuple
 
 from langchain_core.documents import Document
 
 from app.core.config import settings
+from app.core.metrics import rag_rerank_duration_seconds, rag_stage_fallback_total
 
 logger = logging.getLogger(__name__)
 
@@ -85,12 +87,14 @@ def rerank(
     if not candidates:
         return []
 
+    started = time.perf_counter()
     try:
         model = get_reranker()
     except Exception as exc:  # pragma: no cover - 依赖网络/模型文件
         if not _load_failed:
             _load_failed = True
             logger.warning("重排模型加载失败，本次退化为召回顺序：%s", exc)
+            rag_stage_fallback_total.labels(stage="rerank_load_failed").inc()
         return candidates[:top_k]
 
     pairs = [(query, document.page_content) for document, _score in candidates]
@@ -100,4 +104,5 @@ def rerank(
         for (document, _score), logit in zip(candidates, logits)
     ]
     scored.sort(key=lambda item: -item[1])
+    rag_rerank_duration_seconds.observe(time.perf_counter() - started)
     return scored[:top_k]

@@ -63,3 +63,44 @@ groups:
         annotations:
           summary: "10 分钟没有任何请求"
           description: "要么真的没人用，要么流量进不来（nginx、端口映射、健康检查）。"
+
+      # --- AI / RAG 链路 ---
+      # AI 链路最危险的失效不是报错，而是「不报错但答得越来越差」：
+      # 知识库没同步、检索阈值调过头、模型悄悄换了版本，指标上只有一条平滑的曲线，
+      # 用户却在不断流失。下面三条就是专门盯这类「静默劣化」的。
+
+      - alert: RagEmptyHitRateHigh
+        expr: |
+          sum(rate(rag_retrieval_outcome_total{outcome=~"empty_index|all_below_threshold|no_candidates"}[10m]))
+            / clamp_min(sum(rate(rag_retrieval_outcome_total[10m])), 0.01) > 0.3
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "AI 检索命中率过低（超过 30% 的问题没有可用知识）"
+          description: "当前空转比例 {{ $value | humanizePercentage }}。先看是 empty_index（索引没同步）还是 all_below_threshold（阈值过严/知识库缺内容）。"
+
+      - alert: LlmHighErrorRate
+        expr: |
+          sum(rate(llm_request_duration_seconds_count{result="error"}[5m]))
+            / clamp_min(sum(rate(llm_request_duration_seconds_count[5m])), 0.01) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "LLM 调用错误率超过 10%"
+          description: "检查 DeepSeek API Key 额度、网络连通性，以及 rag_stage_fallback_total 里哪一阶段在降级。"
+
+      - alert: LlmSlowFirstToken
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(llm_time_to_first_token_seconds_bucket[5m])) by (le)
+          ) > 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM 首 token 延迟 P95 超过 3 秒"
+          description: "用户感知的是首 token 而不是总耗时。超过 3 秒基本等于「点了没反应」。"
+

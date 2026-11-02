@@ -16,8 +16,26 @@ x-backend-env: &backend-env
   JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
   DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
   DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+  # 模型名此前没有透传通道，容器里换不了模型（只能改镜像里的默认值）
+  DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-flash}
   # Redis 不可用时服务会自动降级（无缓存、不限流），不会因此起不来
   REDIS_URL: redis://redis:6379/0
+  # --- RAG 检索相关开关 ---
+  # 这些设置项此前**没有任何透传通道**：README 把「开启重排后 recall@3 到 100%」
+  # 当作卖点，但在 Docker 部署里根本打不开这个开关（容器内没有 .env，
+  # 根目录 .env 又被 .dockerignore 排除）。补上带默认值的透传后，
+  # 「clone 下来就能跑」不受影响，而想调参的人终于有了入口。
+  RAG_RETRIEVAL_MODE: ${RAG_RETRIEVAL_MODE:-hybrid}
+  RAG_MIN_RELEVANCE: ${RAG_MIN_RELEVANCE:-0.3}
+  RAG_RERANK_ENABLED: ${RAG_RERANK_ENABLED:-false}
+  RAG_VECTOR_WEIGHT: ${RAG_VECTOR_WEIGHT:-0.6}
+  RAG_BM25_WEIGHT: ${RAG_BM25_WEIGHT:-0.4}
+  RAG_RERANK_CANDIDATES: ${RAG_RERANK_CANDIDATES:-10}
+  # --- 可观测性 ---
+  # JSON 日志格式器写好了却从来没有被启用过。打开这一项，
+  # `docker logs | jq` 就能直接按字段过滤 AI 链路日志。
+  LOG_JSON: ${LOG_JSON:-false}
+  LOG_SLOW_REQUEST_MS: ${LOG_SLOW_REQUEST_MS:-500}
 
 services:
   redis:

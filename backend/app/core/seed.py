@@ -14,6 +14,7 @@ import os
 
 from app.ai.eval_dataset import EVAL_CASES, KNOWLEDGE_DOCS
 from app.core.catalog import BANNERS, CATALOG, CATEGORY_TREE
+from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.security import hash_password
 from app.models.chat import EvalTestCase
@@ -166,12 +167,51 @@ def _backfill_skus(db):
 
 
 def _seed_banners(db):
-    if db.query(Banner).count():
+    """Banner 播种 + 图片路径纠正。
+
+    和商品一样，这里也要纠正历史数据：早期版本的 Banner 图片用的是上传后
+    生成的哈希文件名（``ef22839b...jpg``），后来改成语义化的 slug
+    （``banner-digital.jpg``）。只改种子文件不会让已入库的记录自己变好，
+    于是首页 Banner 会一直 404，而 e2e 的「控制台零报错」断言会把它抓出来。
+
+    只在 title 能对上时纠正 image 一个字段，其余字段（link / sort）保持
+    「已存在就不动」，免得覆盖运营在后台调过的顺序。
+
+    另外补一条兜底：如果某条 Banner 的图片文件已经不在磁盘上（典型的
+    旧哈希图残留），就按 sort 顺序取对应位置的 slug 图。这条不能只靠
+    title 匹配——运营在后台改过标题的 Banner 会匹配不上，但它的图仍然是
+    失效的旧路径，不修就还是 404。
+    """
+    existing = db.query(Banner).all()
+    if not existing:
+        for title, slug, link, sort in BANNERS:
+            db.add(Banner(title=title, image=_img(slug), link=link, sort=sort))
+        db.commit()
+        print(f"[OK] banners: {len(BANNERS)}")
         return
-    for title, slug, link, sort in BANNERS:
-        db.add(Banner(title=title, image=_img(slug), link=link, sort=sort))
-    db.commit()
-    print(f"[OK] banners: {len(BANNERS)}")
+
+    expected = {title: _img(slug) for title, slug, _link, _sort in BANNERS}
+    by_sort = {sort: _img(slug) for _title, slug, _link, sort in BANNERS}
+    static_root = settings.data_path.parent / "static" / "products"
+
+    def _file_exists(image_path: str) -> bool:
+        if not image_path:
+            return False
+        return (static_root / image_path.rsplit("/", 1)[-1]).exists()
+
+    fixed = 0
+    for banner in existing:
+        want = expected.get(banner.title) or by_sort.get(banner.sort)
+        # 标题对得上 → 用该标题的 slug；否则只有当图片真的失效时才按 sort 兜底，
+        # 避免把运营自定义的、仍然有效的图片覆盖掉。
+        if want and banner.image != want and (
+            expected.get(banner.title) or not _file_exists(banner.image)
+        ):
+            banner.image = want
+            fixed += 1
+    if fixed:
+        db.commit()
+        print(f"[OK] 修正了 {fixed} 个历史 Banner 的图片错位")
 
 
 def _seed_knowledge(db):

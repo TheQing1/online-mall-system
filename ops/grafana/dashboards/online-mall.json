@@ -77,6 +77,114 @@
           "legendFormat": "定时任务 {{result}}"
         }
       ]
+    },
+
+    {
+      "id": 10,
+      "type": "row",
+      "title": "AI 智能客服（RAG 链路）",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 16 },
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "检索链路分段耗时：召回 / 重排 vs 首 token vs 总耗时",
+      "description": "回答慢要能一眼看出慢在哪一段。检索和重排是 CPU 前向，首 token 和总耗时是模型侧。",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 17 },
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum(rate(rag_retrieval_duration_seconds_bucket[5m])) by (le, mode))",
+          "legendFormat": "检索 P95 ({{mode}})"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum(rate(rag_rerank_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "重排 P95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.95, sum(rate(llm_time_to_first_token_seconds_bucket[5m])) by (le))",
+          "legendFormat": "首 token P95"
+        },
+        {
+          "refId": "D",
+          "expr": "histogram_quantile(0.95, sum(rate(llm_request_duration_seconds_bucket{stage=\"answer\"}[5m])) by (le))",
+          "legendFormat": "生成 P95"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "检索结果分类：命中 / 全低于阈值 / 索引为空 / 未召回",
+      "description": "直接回答「AI 为什么答不上来」：empty_index 是索引没同步，all_below_threshold 是阈值过严或知识库缺内容，no_candidates 是查询/模型问题。",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 17 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(rag_retrieval_outcome_total[5m]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "检索 top-1 相关性得分分布（效果漂移）",
+      "description": "整体左移说明知识库或 Embedding 出问题了——这是「不报错但答得越来越差」的唯一可观测信号。",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 25 },
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit" },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum(rate(rag_best_score_bucket[15m])) by (le))",
+          "legendFormat": "P50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.90, sum(rate(rag_best_score_bucket[15m])) by (le))",
+          "legendFormat": "P90"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.10, sum(rate(rag_best_score_bucket[15m])) by (le))",
+          "legendFormat": "P10"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Token 消耗（成本）与链路降级",
+      "description": "prompt/completion token 速率就是成本曲线；降级计数告诉你改写失败、重排加载失败、商品兜底各发生了多少次。",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 25 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kind) (rate(llm_tokens_total[5m]))",
+          "legendFormat": "token {{kind}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (stage) (rate(rag_stage_fallback_total[5m]))",
+          "legendFormat": "降级 {{stage}}"
+        }
+      ]
     }
   ]
 }
+

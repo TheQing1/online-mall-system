@@ -22,15 +22,27 @@
 
 import re
 import threading
+import time
 from typing import List, Optional, Tuple
 
 import jieba
 from langchain_core.documents import Document
 from rank_bm25 import BM25Plus
 
-from app.ai.vectorstore import get_vectorstore, index_generation, search_similar
+from app.ai.vectorstore import (
+    get_vectorstore,
+    index_generation,
+    is_index_empty,
+    search_similar,
+)
 from app.ai.reranker import rerank
 from app.core.config import settings
+from app.core.metrics import (
+    rag_best_score,
+    rag_rerank_duration_seconds,
+    rag_retrieval_duration_seconds,
+    rag_retrieval_outcome_total,
+)
 
 # 纯标点/空白的分词结果不参与 BM25 统计
 _NOISE = re.compile(r"^[\W_]+$", re.UNICODE)
@@ -119,8 +131,12 @@ def retrieve(
 
     开启重排（``RAG_RERANK_ENABLED``）后，召回会多取一些候选、再由 CrossEncoder
     收敛到 top-k，此时返回的得分是重排模型的 sigmoid 输出（0~1，0.5 相当于打平）。
+
+    埋点说明：这里同时记录耗时、结果分类、top-1 得分分布。**不要按 query 打标签**
+    ——那会把 label 基数打到无穷大，和 HTTP 指标踩的是同一个坑。
     """
     mode = (mode or settings.rag_retrieval_mode).lower()
+    started = time.perf_counter()
     # 重排要从更多候选里挑，所以召回阶段先多取一点
     want = max(k, settings.rag_rerank_candidates) if settings.rag_rerank_enabled else k
 
@@ -132,9 +148,33 @@ def retrieve(
             for doc, distance in search_similar(query, k=want)
         ]
 
-    if settings.rag_rerank_enabled:
+    rerank_used = settings.rag_rerank_enabled
+    rerank_started = time.perf_counter()
+    if rerank_used:
         ranked = rerank(query, ranked[: settings.rag_rerank_candidates], k)
-    return ranked[:k]
+        rag_rerank_duration_seconds.observe(time.perf_counter() - rerank_started)
+
+    top = ranked[:k]
+
+    # --- 埋点 ---
+    rag_retrieval_duration_seconds.labels(
+        mode=mode, rerank="true" if rerank_used else "false"
+    ).observe(time.perf_counter() - started)
+
+    if not top:
+        # 区分「索引空」和「召回为空」：两者排查方向完全不同
+        outcome = "empty_index" if is_index_empty() else "no_candidates"
+        rag_retrieval_outcome_total.labels(outcome=outcome).inc()
+    else:
+        best = top[0][1]
+        rag_best_score.observe(best)
+        if best >= settings.rag_min_relevance:
+            rag_retrieval_outcome_total.labels(outcome="hit").inc()
+        else:
+            # 召回到了，但连最高分都过不了阈值——通常是知识库缺内容或阈值过严
+            rag_retrieval_outcome_total.labels(outcome="all_below_threshold").inc()
+
+    return top
 
 
 def _hybrid_search(query: str, k: int) -> List[Tuple[Document, float]]:
