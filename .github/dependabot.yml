@@ -22,6 +22,42 @@ updates:
     labels:
       - dependencies
       - backend
+    # --- 必须锁住的东西 ---
+    #
+    # 这些不是「懒」，是**实测确认会坏**。dependabot 默认会为它们每周开 PR，
+    # 一条长期开着、没人合、也没人明确否决的 PR，只会训练大家忽略 PR 列表。
+    # 与其每次手动关掉，不如在这里写清楚为什么不能升。
+    #
+    # 解除条件：单独排期做框架大版本升级，并完整重跑 129 个后端用例 + 13 个 e2e。
+    ignore:
+      # 实测：装 starlette 1.x 后 FastAPI 0.115 直接起不来——
+      #   TypeError: Router.__init__() got an unexpected keyword argument 'on_startup'
+      # （starlette 1.0 移除了 on_startup 参数，而 FastAPI 0.115 还在用它）
+      # starlette 与 fastapi/pydantic/sqlalchemy 必须**整组一起升**，不能单独动。
+      - dependency-name: "starlette"
+      - dependency-name: "python-multipart"
+      # 同一条升级链上的框架核心：单独升任何一个都会造成版本矩阵自相矛盾。
+      # 这五项要升就一起升，属于「一次独立的迁移工程」，不适合自动 PR。
+      - dependency-name: "fastapi"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "sqlalchemy"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "alembic"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "pydantic"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "pydantic-settings"
+      # LangChain 生态在 requirements.txt 里是强耦合钉死的（核心已锁 0.3.x）。
+      # 单升 langchain-text-splitters 到 1.x 会与 langchain-core 0.3.40 冲突。
+      # 整组迁移到 1.x 是另一件事，需要重新验证检索/重排/流式生成。
+      - dependency-name: "langchain-text-splitters"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "langchain"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "langchain-core"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "langchain-openai"
+        update-types: ["version-update:semver-major"]
     groups:
       # 安全补丁优先，单独一个 PR，方便快速 review 合并
       security:
@@ -115,3 +151,13 @@ updates:
     labels:
       - dependencies
       - docker
+    ignore:
+      # 基础镜像的**大版本**跳变不应自动 PR：
+      # python 3.11 → 3.15 是四次大版本，CPython 每个大版本都可能移除/废弃 API，
+      # 而 torch / chromadb / sentence-transformers 这些重依赖未必有对应 wheel。
+      # node 同理（当前与 Vite 8 / Playwright 的版本矩阵是配套验证过的）。
+      # 只接受同一个大版本内的补丁升级（3.11.x → 3.11.y）。
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
