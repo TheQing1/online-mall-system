@@ -1,8 +1,8 @@
 fastapi==0.115.0
-uvicorn[standard]==0.30.0
-sqlalchemy==2.0.35
-pymysql==1.1.1
-alembic==1.13.0
+uvicorn[standard]==0.54.0
+sqlalchemy==2.0.55
+pymysql==1.2.3
+alembic==1.20.1
 # JWT：从 python-jose 换成 PyJWT。
 # python-jose 3.3.0 有 4 条已知 CVE（算法混淆 / 解压型 DoS），而它承担全部认证，
 # 是项目里风险最高的依赖。全仓只有 app/core/security.py 用到它，且只用到
@@ -14,13 +14,13 @@ alembic==1.13.0
 pyjwt==2.15.1
 bcrypt==5.0.0
 python-multipart==0.0.9
-pydantic==2.9.0
+pydantic==2.9.2
 pydantic-settings==2.5.0
-langchain==0.3.13
-langchain-core==0.3.40
-langchain-text-splitters==0.3.5
-langchain-openai==0.2.14
-langchain-huggingface==0.1.2
+langchain==0.3.30
+langchain-core==0.3.86
+langchain-text-splitters==0.3.11
+langchain-openai==0.3.35
+langchain-huggingface==0.3.1
 modelscope
 
 # CPU 版 torch：模型是强制跑 CPU 的（见 app/ai/vectorstore.py 里的
@@ -47,5 +47,5 @@ prometheus-client==0.26.0
 # FastAPI 0.115 的约束是 starlette>=0.37.2,<0.39.0；显式钉住避免被别的包
 # 顺手升到 1.x（升上去 Router 会少掉 on_startup 参数，应用直接起不来）
 starlette==0.38.6
-python-dotenv==1.0.1
+python-dotenv==1.2.4
 aiofiles==24.1.0
