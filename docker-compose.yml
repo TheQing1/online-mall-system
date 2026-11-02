@@ -201,14 +201,51 @@ services:
     profiles: ["observability"]
     restart: unless-stopped
     volumes:
-      # 抓取目标与告警规则都在这里，改完 reload 即可（见 README）
+      # 抓取目标、告警规则、告警路由都在这里，改完 reload 即可（见 README）
       - ./ops/prometheus:/etc/prometheus:ro
       - prometheus-data:/prometheus
+    # 指标保留 15 天：默认不限制会把磁盘吃满，而 15 天足够回溯一次故障
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"   # 支持 POST /-/reload，改规则不用重启
     ports:
       - "9090:9090"
     depends_on:
       backend:
         condition: service_healthy
+      alertmanager:
+        condition: service_started
+
+  # 告警投递。之前 alerts.yml 有 9 条规则、有 for: 有 severity，
+  # 但**没有 Alertmanager**，于是规则永远不会投递到任何地方——
+  # 「写了规则但没人被叫醒」，等于只做了一半。
+  alertmanager:
+    image: prom/alertmanager:v0.28.0
+    profiles: ["observability"]
+    restart: unless-stopped
+    volumes:
+      - ./ops/alertmanager:/etc/alertmanager:ro
+      - alertmanager-data:/alertmanager
+    # ALERT_WEBHOOK_URL 从 .env 读；不填时用一个必定连不上的占位地址，
+    # 这样本地不配通知渠道也能起，只是推送会失败并在日志里留下记录。
+    environment:
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-http://127.0.0.1:9099/disabled}
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+      # 关键：Alertmanager 的配置文件**默认不做环境变量替换**，
+      # 直接写 ${ALERT_WEBHOOK_URL} 会解析失败、容器起不来。
+      # 必须显式加这个参数才会展开 ${VAR}（v0.22+ 支持）。
+      - "--config.expand-env=true"
+    ports:
+      - "9093:9093"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   grafana:
     image: grafana/grafana:11.4.0
@@ -235,3 +272,5 @@ volumes:
   redis-data:
   prometheus-data:
   grafana-data:
+  # 告警静默（silence）与通知去重状态存在这里，重启后不会重复轰炸
+  alertmanager-data:

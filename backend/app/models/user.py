@@ -14,7 +14,12 @@ class User(Base, TimestampMixin):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    username = Column(String(50), unique=True, nullable=False, index=True)
+    # 只留 unique=True，去掉 index=True：
+    # 唯一约束在 MySQL 里本身就带一棵唯一索引（名字就是约束名 username），
+    # 再声明 index=True 会让 Alembic 期望一个额外的 ix_users_username，
+    # 于是 compare_metadata 报「模型有、库里没有」的假漂移。
+    # 同一个结论适用于下面的 email。
+    username = Column(String(50), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
     email = Column(String(100), unique=True, nullable=True)
     phone = Column(String(20), nullable=True)

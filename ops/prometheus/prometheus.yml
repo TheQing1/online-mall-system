@@ -1,9 +1,22 @@
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
+  # 指标保留期。默认不限制，长期跑会把磁盘吃满——这在只有 20G 的学生机上
+  # 是很现实的问题。15 天足够回溯「上周那次故障」。
+  # （该配置由 compose 的命令行参数传入，这里写注释说明取舍。）
 
 rule_files:
   - /etc/prometheus/alerts.yml
+
+# 告警要有人收。
+# 没有 alerting 这一段，rule_files 里的规则只会被评估、
+# 永远不会投递到任何地方——「规则写了但没人被叫醒」正是之前的实际状态。
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+      # 用短超时：Alertmanager 不可达时别拖慢 Prometheus 的评估周期
+      timeout: 5s
 
 scrape_configs:
   - job_name: online-mall-api
@@ -12,3 +25,14 @@ scrape_configs:
       - targets: ["backend:8000"]
         labels:
           service: online-mall-api
+
+  # Prometheus 自己的指标：连「监控系统本身挂了」都该有信号，
+  # 否则你只会发现「面板一片空白」而不知道原因。
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Alertmanager 自身的指标，用于确认通知链路是活的
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]

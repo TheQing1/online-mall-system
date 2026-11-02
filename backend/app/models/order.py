@@ -8,6 +8,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     DateTime,
+    Index,
 )
 from sqlalchemy.orm import relationship
 import enum
@@ -27,10 +28,26 @@ class OrderStatus(str, enum.Enum):
 
 class Order(Base, TimestampMixin):
     __tablename__ = "orders"
+    # 这两个索引原先**只存在于迁移里、模型中没有声明**。
+    # 后果是：`alembic upgrade head` 建出来的库有索引，但如果有人用
+    # `Base.metadata.create_all()`（测试就是这么建表的）建库就会丢掉它们——
+    # 于是「测试跑得飞快、生产却很慢」，而且 compare_metadata 会一直报
+    # 「库里有、模型没有」的反向漂移。
+    # 声明放在模型里，两条建库路径才对同一份 schema 负责。
+    __table_args__ = (
+        # 关单任务每 30 秒扫一次 WHERE status='pending_pay' AND created_at < ?
+        Index("ix_orders_status_created_at", "status", "created_at"),
+        # 「我的订单」是 WHERE user_id=? ORDER BY created_at DESC
+        Index("ix_orders_user_id_created_at", "user_id", "created_at"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    order_no = Column(String(32), unique=True, nullable=False, index=True)
+    # 只留 unique=True，不写 index=True：唯一约束自带索引。
+    # 迁移里建的名字是 order_no（MySQL 用约束名命名索引）；
+    # 若在这里再声明 index=True，Alembic 会期望 ix_orders_order_no，
+    # 与实际库不一致，compare_metadata 会一直报索引改名。
+    order_no = Column(String(32), unique=True, nullable=False)
     total_amount = Column(DECIMAL(10, 2), nullable=False)
     status = Column(Enum(OrderStatus), default=OrderStatus.PENDING_PAY, nullable=False)
     address_snapshot = Column(JSON, nullable=False)

@@ -10,7 +10,12 @@ class ChatSession(Base, TimestampMixin):
     __tablename__ = "chat_sessions"
 
     id = Column(String(36), primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    # 刻意不写 index=True：这一列是外键，InnoDB 会**自动**为外键列建索引
+    # （实测库里已有名为 user_id 的索引）。模型再声明一次，Alembic 的
+    # compare_metadata 就会报「模型有、库里没有」的假漂移，
+    # 而按它的建议去建索引只会得到一个功能重复的冗余索引。
+    # 同一个结论已经在 alembic/versions/2026_09_08_order_indexes.py 里验证过。
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     title = Column(String(100), default="新会话", nullable=False)
 
     messages = relationship(

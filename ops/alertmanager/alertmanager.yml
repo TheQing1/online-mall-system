@@ -1,0 +1,61 @@
+# Prometheus Alertmanager 配置。
+#
+# 为什么需要它：alerts.yml 里写了 9 条告警规则、有 for: 有 severity，
+# 但没有 Alertmanager 的话，**这些规则永远不会投递到任何地方**——
+# 规则只是「记录当前处于 firing 状态」，没人会被叫醒。
+# 「规则写了但没接通知渠道」等于只做了一半，这是当时的真实状态。
+#
+# 投递方式默认是 **webhook**：不绑定具体厂商，配一个 URL 就能用。
+# 钉钉 / 企业微信 / Slack 的群机器人都是 webhook，接哪个只改 URL 和格式。
+#
+# 启用方式见 README「监控与告警」一节。不配 ALERT_WEBHOOK_URL 时，
+# 告警仍然会被 Prometheus 记录、在 Prometheus 与 Grafana 里都能看到，
+# 只是不会推送出去——本地开发这通常正是想要的。
+global:
+  # 告警恢复后多久算「已解决」；配合 group_interval 控制重复通知的频率
+  resolve_timeout: 5m
+
+route:
+  # 同类告警聚合成一条，避免一次故障刷屏
+  group_by: ["alertname", "severity"]
+  # 新告警产生后等 30 秒再发：同批故障通常会一起冒出来
+  group_wait: 30s
+  # 同一组告警的更新间隔（有新增时）
+  group_interval: 5m
+  # 未恢复的告警重复提醒间隔
+  repeat_interval: 4h
+  receiver: default
+
+  # 按 severity 分流：critical 缩短重复间隔，warning 拉长。
+  # 这样「严重问题一直被提醒、轻微问题不吵人」。
+  # 注意：子路由必须嵌在 route.routes 下，写成顶层 routes: 是无效的
+  # （Alertmanager 不认识顶层 routes 键，会静默忽略）。
+  routes:
+    - matchers: ['severity="critical"']
+      receiver: default
+      repeat_interval: 1h
+    - matchers: ['severity="warning"']
+      receiver: default
+      repeat_interval: 12h
+
+receivers:
+  - name: default
+    webhook_configs:
+      # url 走环境变量注入（compose 里映射），为空时 Alertmanager 会启动失败，
+      # 所以 compose 里给了一个指向本地占位端点的默认值；本地不启用告警推送时
+      # 这个端点不通也只会打日志，不会影响 Prometheus 抓取。
+      - url: ${ALERT_WEBHOOK_URL}
+        send_resolved: true
+        # 重试上限：避免目标不可达时无限重试堆积
+        max_alerts: 0
+
+inhibit_rules:
+  # Redis 挂了会连带触发缓存命中率异常、慢请求等一堆衍生告警。
+  # 抑制掉这些衍生项，只保留根因那一条，否则排查时会被噪音淹没。
+  - source_matchers: ['alertname="RedisUnavailable"']
+    target_matchers: ['severity="warning"']
+    equal: []
+
+  # 已经有 5xx 比例告警时，就不必再逐条喊「慢请求」了
+  - source_matchers: ['alertname="ApiHighErrorRate"']
+    target_matchers: ['alertname="ApiSlowRequests"']

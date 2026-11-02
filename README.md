@@ -106,7 +106,17 @@ DEEPSEEK_API_KEY=sk-xxx docker compose up -d --build
 并下载约 100MB 的 BGE 模型，等几分钟是正常的。
 
 想再看一眼监控面板：`docker compose --profile observability up -d`
-（Prometheus `:9090`，Grafana `:3000`）。
+（Prometheus `:9090`，Alertmanager `:9093`，Grafana `:3000`）。
+
+想让告警真的**推送出来**（默认只在面板里可见）：在 `.env` 里填一个 webhook 地址，
+
+```bash
+# 钉钉 / 企业微信 / Slack 的群机器人都是 webhook，填 URL 即可
+ALERT_WEBHOOK_URL=https://oapi.dingtalk.com/robot/send?access_token=xxx
+```
+
+然后 `docker compose --profile observability up -d alertmanager` 重建即可。
+不填也能正常工作——只会在 Alertmanager 日志里留下投递失败的记录。
 
 <details>
 <summary>国内构建慢的话，换上 pip / npm 镜像源</summary>
@@ -322,7 +332,9 @@ CI 里有一个独立的 `e2e` 任务跑这套用例（起 MySQL + Redis + API +
 - 缓存是 Redis 单级 + 进程内单飞：Redis 挂掉的降级期内读请求会直接压到 MySQL，
   多副本时单飞只在进程内生效；
 - 限流是固定窗口，窗口边界可能出现两倍突发，也没有按用户等级/接口成本做差异化配额；
-- 告警规则写好了，但没接通知渠道（Alertmanager / 钉钉），也没有指标长期存储；
+- 告警已接 Alertmanager（webhook，支持钉钉/企微/Slack），并配了 severity 分流与
+  抑制规则；但**没有指标长期存储**（Prometheus 只保留 15 天，没有 Thanos/VictoriaMetrics
+  这类远端存储），跨季度趋势看不出来；
 - **AI 链路有指标但没有 trace 采样**：一次问答的日志是完整的一行，但跨多次问答的
   会话级分析（例如「同一个用户反复问同一个问题」）还没有做；
 - **BGE 模型冷启动要 7~9 秒**（首个请求包含模型加载），目前只靠部署脚本预热缓解，
