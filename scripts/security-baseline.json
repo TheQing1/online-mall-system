@@ -8,12 +8,6 @@
       "PYSEC-2026-3815"
     ]
   },
-  "ecdsa": {
-    "version": "0.19.2",
-    "ids": [
-      "PYSEC-2026-1325"
-    ]
-  },
   "langchain": {
     "version": "0.3.13",
     "ids": [
@@ -58,15 +52,6 @@
     "version": "1.0.1",
     "ids": [
       "PYSEC-2026-2270"
-    ]
-  },
-  "python-jose": {
-    "version": "3.3.0",
-    "ids": [
-      "PYSEC-2024-232",
-      "PYSEC-2024-233",
-      "PYSEC-2025-185",
-      "PYSEC-2026-4298"
     ]
   },
   "python-multipart": {

@@ -3,7 +3,15 @@ uvicorn[standard]==0.30.0
 sqlalchemy==2.0.35
 pymysql==1.1.1
 alembic==1.13.0
-python-jose[cryptography]==3.3.0
+# JWT：从 python-jose 换成 PyJWT。
+# python-jose 3.3.0 有 4 条已知 CVE（算法混淆 / 解压型 DoS），而它承担全部认证，
+# 是项目里风险最高的依赖。全仓只有 app/core/security.py 用到它，且只用到
+# encode/decode 两个函数，迁移面极小。
+# 两者都是标准 JWS、令牌互相可解，已实测双向兼容，升级不会让已登录用户掉线。
+# 版本选择记录：曾试过 pyjwt==2.10.1，但它自己带 17 条 CVE（修复点分布在
+# 2.12 ~ 2.15），换上之后漏洞反而比 python-jose 的 4 条更多——说明「换库」
+# 不等于「更安全」，必须用扫描结果验证。2.15.1 是当前修复最全的版本，0 条。
+pyjwt==2.15.1
 bcrypt==4.2.0
 python-multipart==0.0.9
 pydantic==2.9.0

@@ -123,7 +123,10 @@
 
 ### 11. JWT 流程
 
-1. 登录成功后用 `python-jose` 签发 HS256 token，payload 是 `sub=user_id` + `exp`（默认 1440 分钟）；
+1. 登录成功后用 `PyJWT` 签发 HS256 token，payload 是 `sub=user_id` + `exp`（默认 1440 分钟）；
+   > 原先用 `python-jose`，因它 3.3.0 有 4 条 CVE 且承担全部认证，已迁移到 PyJWT 2.15.1。
+   > `decode` 必须显式传 `algorithms=[...]`——这正是抵御算法混淆攻击的关键，
+   > 不要图省事从 token 头里读算法。
 2. 前端存 localStorage，axios 请求拦截器自动加 `Authorization: Bearer`；
 3. 后端 `get_current_user`：`HTTPBearer` 取 token → 验签名/过期 → 查库确认用户存在且 `is_active`；
 4. 401 时前端拦截器清 token 并跳登录页。
@@ -639,8 +642,15 @@ Docker 网段，并且由 `check-env.sh` 在启动**前**断言——但这是"�
 处理方式是**基线模式**而不是全量卡死：一条 39 处红叉、长期没人处理的检查，
 唯一的效果是让大家习惯性忽略它。现在基线之外出现新漏洞立即失败，
 存量漏洞集中登记在 `scripts/BASELINE.md` 里逐条说明为什么不升、什么时候必须升。
-其中 `starlette` 是被 FastAPI 0.115 的版本约束卡住的（升它要跨大版本升框架），
-`python-jose` 那 4 条改造成本最低，应该优先做掉。
+其中 `starlette` 是被 FastAPI 0.115 的版本约束卡住的（升它要跨大版本升框架）。
+
+**做掉的那一条，以及一个反直觉的教训**：`python-jose` 承担全部认证、当时风险最高，
+已迁到 PyJWT，消掉 5 条（含它依赖的 ecdsa），总数 39 → 34。
+但第一次我把 pyjwt 钉在 **2.10.1**，扫描后发现**它自己带 17 条 CVE**，
+比 python-jose 的 4 条还多；换成 2.15.1 才是 0 条。
+**「换一个更活跃的库」不等于「更安全」——必须用扫描结果验证，不能凭印象。**
+迁移前还专门验了令牌的跨库兼容性（jose 签发 → PyJWT 解码、以及反向），
+确认升级不会让已登录用户掉线、回滚也不用重新登录。
 
 **稳定性**：定时任务已用 Redis 分布式锁 + 独立 worker 解决多副本问题；日志是结构化
 JSON 并带 request_id、也暴露了 Prometheus 指标，还配了 6 条告警规则，但**没有接通知渠道**

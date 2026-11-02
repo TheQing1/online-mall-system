@@ -6,7 +6,8 @@
 ## 现状
 
 用 `pip-audit -r backend/requirements.txt` 扫描的结果：
-**39 条漏洞，分布在 11 个包**（不含 pip / setuptools 这类工具链自身的条目）。
+**34 条漏洞，分布在 9 个包**（不含 pip / setuptools 这类工具链自身的条目）。
+> 建档时是 39 条 / 11 个包，`python-jose` → PyJWT 迁移后降到现在的数字（见 D 组）。
 
 基线文件：`scripts/security-baseline.json`（由脚本自动生成，请勿手改）。
 
@@ -50,10 +51,27 @@ bash scripts/security-audit.sh --update   # 重新生成基线（需人工 revie
 
 | 包 | 当前 | 建议 |
 |---|---|---|
-| `python-jose` | 3.3.0 | 4 条 CVE。**只用在 `security.py` 的 `jwt.encode/decode`**，改造成本很低，建议优先处理（或整体迁移到 PyJWT） |
-| `ecdsa` | 0.19.2 | `python-jose` 的依赖，随它一起解决 |
 | `chromadb` | 1.5.9 | 4 条，向量库；升级需重新验证索引读写 |
 | `python-dotenv` | 1.0.1 | 1 条，影响很小，可随时升 |
+
+### D. 已解决（保留记录，说明这个机制真的在用）
+
+**`python-jose` 3.3.0 → PyJWT 2.15.1**：4 条 CVE + 其依赖 `ecdsa` 的 1 条，共 5 条已消除。
+
+它承担**全部认证**，是当时风险最高的依赖。迁移面很小（全仓只有 `security.py`
+用到 `encode`/`decode` 两个函数），两处行为差异都做了核实：
+
+1. 异常类型：jose 的 `JWTError` → PyJWT 的 `InvalidTokenError`
+   （`ExpiredSignatureError` / `InvalidSignatureError` 都是它的子类）；
+2. 令牌格式：两者都是标准 JWS，**互相可解**。实测「jose 签发 → PyJWT 解码」
+   与反向都通过，因此升级不会让已登录用户掉线，回滚也无需重新登录。
+
+**一个值得记住的教训**：第一次把 `pyjwt` 钉在 `2.10.1`，扫描后发现它自己带
+**17 条 CVE**（修复点分布在 2.12 ~ 2.15），比 python-jose 的 4 条还多。
+说明「换一个更活跃的库」不等于「更安全」——**必须用扫描结果验证，而不是凭印象**。
+最终选 `2.15.1`，0 条。
+
+结果：漏洞总数 **39 → 34**，包数 11 → 9。
 
 ## 为什么当初会漏掉这件事
 
