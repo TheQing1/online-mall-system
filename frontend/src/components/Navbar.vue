@@ -96,4 +96,14 @@ function logout() {
 .logo { font-size: 20px; font-weight: bold; color: #409eff; text-decoration: none; white-space: nowrap; }
 .nav-center { flex: 1; max-width: 500px; }
 .nav-right { display: flex; align-items: center; gap: 12px; }
+
+/* 手机上 40px 的左右内边距 + 固定 500px 的搜索区会把整条导航挤爆，
+   登录/注册按钮被推到屏幕外。这里在窄屏收起搜索框与注册按钮：
+   搜索走商品列表页的筛选，注册在登录页里有入口，功能并不丢失。 */
+@media (max-width: 768px) {
+  .navbar { gap: 10px; padding: 0 12px; height: 56px; }
+  .logo { font-size: 16px; }
+  .nav-center { display: none; }
+  .nav-right { gap: 8px; margin-left: auto; }
+}
 </style>

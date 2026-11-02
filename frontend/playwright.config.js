@@ -34,5 +34,21 @@ export default defineConfig({
       testMatch: /admin(-styles)?\.spec\.js$/,
       use: { baseURL: 'http://localhost:5174' },
     },
+    {
+      // 移动端：同一个商城，375×812（iPhone 尺寸）视口。
+      // 加这个 project 的理由很直接——全站曾经一条 @media 都没有，
+      // 固定 4 列网格和 400px 宽的客服窗在手机上会横向溢出，
+      // 而桌面端视口永远发现不了。只跑 mobile.spec.js 这一个文件，
+      // 其他用例不需要在手机上重复跑一遍。
+      name: 'mall-mobile',
+      testMatch: /mobile\.spec\.js$/,
+      use: {
+        baseURL: 'http://localhost:5173',
+        viewport: { width: 375, height: 812 },
+        isMobile: true,
+        hasTouch: true,
+        deviceScaleFactor: 2,
+      },
+    },
   ],
 })

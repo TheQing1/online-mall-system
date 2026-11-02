@@ -9,11 +9,13 @@ import js from '@eslint/js'
 import pluginVue from 'eslint-plugin-vue'
 
 export default [
-  { ignores: ['dist/**', 'node_modules/**'] },
+  { ignores: ['dist/**', 'node_modules/**', 'playwright-report/**', 'test-results/**'] },
   js.configs.recommended,
   ...pluginVue.configs['flat/essential'],
   {
-    files: ['**/*.{js,vue}'],
+    // 覆盖 .mjs：vite.config / vitest.config / eslint.config 本身也是 .mjs，
+    // 之前只写了 {js,vue}，导致配置文件里的 node 全局（URL、__dirname）被误报 no-undef。
+    files: ['**/*.{js,mjs,vue}'],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',

@@ -37,3 +37,23 @@ export async function settle(page) {
   await page.waitForLoadState('networkidle')
   await page.waitForTimeout(400)
 }
+
+/**
+ * 断言页面没有横向溢出（内容宽度超过视口宽度）。
+ *
+ * 这是移动端最典型的翻车方式：布局写死了固定宽度，手机上出现横向滚动条，
+ * 右侧内容被裁到视口外。它不会报错、不会让用例失败，只能主动断言。
+ *
+ * 给 1px 容差：子像素舍入会让 scrollWidth 偶尔比 clientWidth 大 1。
+ */
+export async function expectNoHorizontalOverflow(page, label = '') {
+  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }))
+  expect(
+    scrollWidth,
+    `${label} 出现横向溢出：内容宽 ${scrollWidth}px > 视口宽 ${clientWidth}px`
+  ).toBeLessThanOrEqual(clientWidth + 1)
+}
+
