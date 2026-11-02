@@ -15,7 +15,7 @@ jobs:
         working-directory: backend
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
@@ -85,7 +85,7 @@ jobs:
       TEST_REDIS_URL: redis://127.0.0.1:6379/9
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
@@ -123,7 +123,7 @@ jobs:
         working-directory: backend
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
@@ -156,7 +156,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
@@ -181,7 +181,7 @@ jobs:
         app: [frontend, admin]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -224,7 +224,7 @@ jobs:
     timeout-minutes: 40
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 部署脚本是 sh/bash，本地开发在 Windows 上根本跑不到，只有 CI 能守住语法。
       # scripts/ 下的运维脚本同理（security-audit.sh 等）。
@@ -366,7 +366,7 @@ jobs:
       SEED_SKIP_VECTOR: "1"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
