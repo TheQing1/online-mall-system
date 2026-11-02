@@ -1,6 +1,6 @@
 # 固定到具体小版本线：node 22（LTS，满足 Vite 8 对 Node >= 22.12 的要求）
 # 和 nginx 1.27 mainline-alpine。
-FROM node:22-alpine AS frontend-builder
+FROM node:26-alpine AS frontend-builder
 WORKDIR /app/frontend
 # 先只 COPY 依赖清单再 npm ci：源码改动不会让依赖安装层缓存失效。
 # 这里不再用 package-lock.json* 通配：npm ci 必须有 lock 文件，缺失时应当直接构建失败。
@@ -13,7 +13,7 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm ci --registry="$NPM_REGISTRY"; else npm 
 COPY frontend .
 RUN npm run build
 
-FROM node:22-alpine AS admin-builder
+FROM node:26-alpine AS admin-builder
 WORKDIR /app/admin
 COPY admin/package.json admin/package-lock.json ./
 ARG NPM_REGISTRY
