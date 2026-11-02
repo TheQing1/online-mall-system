@@ -20,7 +20,7 @@ langchain==0.3.13
 langchain-core==0.3.40
 langchain-text-splitters==0.3.5
 langchain-openai==0.2.14
-langchain-huggingface==0.1.2
+langchain-huggingface==1.2.3
 modelscope
 
 # CPU 版 torch：模型是强制跑 CPU 的（见 app/ai/vectorstore.py 里的
