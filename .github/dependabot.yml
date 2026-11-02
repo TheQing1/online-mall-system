@@ -58,6 +58,13 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "langchain-openai"
         update-types: ["version-update:semver-major"]
+      # 实测：langchain-huggingface 1.2.3 与锁定的 langchain-core 0.3.40
+      #   → ResolutionImpossible（安装阶段直接冲突）。
+      # 正确的升级路径是 0.1.2 → 0.3.1，但那会连带把 langchain-core 拉到
+      # 0.3.86 并引入 httpx2 / xxhash / zstandard 等一串新依赖——
+      # 这属于「LangChain 生态整组迁移」，是一次独立工程，不是自动 PR 能覆盖的。
+      - dependency-name: "langchain-huggingface"
+        update-types: ["version-update:semver-major"]
     groups:
       # 安全补丁优先，单独一个 PR，方便快速 review 合并
       security:
