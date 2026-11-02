@@ -277,7 +277,7 @@ jobs:
           sed -i "s/^MYSQL_ROOT_PASSWORD=.*/MYSQL_ROOT_PASSWORD=$(openssl rand -hex 16)/" .env
           bash deploy/check-env.sh
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # 制造「本地装过依赖」的构建环境。
       #
