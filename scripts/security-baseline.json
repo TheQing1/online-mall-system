@@ -1,0 +1,96 @@
+{
+  "chromadb": {
+    "version": "1.5.9",
+    "ids": [
+      "PYSEC-2026-311",
+      "PYSEC-2026-3813",
+      "PYSEC-2026-3814",
+      "PYSEC-2026-3815"
+    ]
+  },
+  "ecdsa": {
+    "version": "0.19.2",
+    "ids": [
+      "PYSEC-2026-1325"
+    ]
+  },
+  "langchain": {
+    "version": "0.3.13",
+    "ids": [
+      "PYSEC-2026-2192",
+      "PYSEC-2026-2555"
+    ]
+  },
+  "langchain-core": {
+    "version": "0.3.40",
+    "ids": [
+      "PYSEC-2026-1518",
+      "PYSEC-2026-2193",
+      "PYSEC-2026-2562",
+      "PYSEC-2026-2563",
+      "PYSEC-2026-2564",
+      "PYSEC-2026-373"
+    ]
+  },
+  "langchain-openai": {
+    "version": "0.2.14",
+    "ids": [
+      "PYSEC-2026-76"
+    ]
+  },
+  "langchain-text-splitters": {
+    "version": "0.3.5",
+    "ids": [
+      "PYSEC-2026-1520",
+      "PYSEC-2026-77"
+    ]
+  },
+  "langsmith": {
+    "version": "0.2.11",
+    "ids": [
+      "CVE-2026-59152",
+      "PYSEC-2026-2555",
+      "PYSEC-2026-2582",
+      "PYSEC-2026-2583"
+    ]
+  },
+  "python-dotenv": {
+    "version": "1.0.1",
+    "ids": [
+      "PYSEC-2026-2270"
+    ]
+  },
+  "python-jose": {
+    "version": "3.3.0",
+    "ids": [
+      "PYSEC-2024-232",
+      "PYSEC-2024-233",
+      "PYSEC-2025-185",
+      "PYSEC-2026-4298"
+    ]
+  },
+  "python-multipart": {
+    "version": "0.0.9",
+    "ids": [
+      "PYSEC-2026-1851",
+      "PYSEC-2026-1852",
+      "PYSEC-2026-3036",
+      "PYSEC-2026-3037",
+      "PYSEC-2026-3038",
+      "PYSEC-2026-3039",
+      "PYSEC-2026-3040"
+    ]
+  },
+  "starlette": {
+    "version": "0.38.6",
+    "ids": [
+      "PYSEC-2026-161",
+      "PYSEC-2026-1941",
+      "PYSEC-2026-1943",
+      "PYSEC-2026-2280",
+      "PYSEC-2026-2281",
+      "PYSEC-2026-248",
+      "PYSEC-2026-249"
+    ]
+  }
+}

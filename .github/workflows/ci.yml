@@ -141,6 +141,38 @@ jobs:
       - name: 真实 BGE 模型下的召回率
         run: pytest -m rag_quality -v -s
 
+  # 依赖漏洞扫描。
+  #
+  # 之前 CI 里完全没有这一步：扩展名白名单、魔数校验、密钥 fail-fast、限流
+  # 这些安全措施都是针对**自己写的代码**，而**第三方依赖**的已知漏洞
+  # 没有任何自动化检查会在「引入一个带洞的依赖」时变红。
+  #
+  # 用基线模式（见 scripts/BASELINE.md）而不是全量卡死：本项目有 39 条存量
+  # 漏洞，主要集中在被框架版本锁住的 starlette/python-multipart 和互相强耦合的
+  # langchain 系；一条 39 处红叉、长期没人处理的检查只会被习惯性忽略。
+  # 基线模式保证「新增漏洞」立刻失败，存量问题仍然可见且需单独排期。
+  security:
+    name: 依赖漏洞扫描
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: 安装 pip-audit
+        run: python -m pip install --upgrade pip pip-audit
+
+      - name: 扫描是否有新增漏洞
+        # 脚本会打印存量漏洞摘要；只有出现基线之外的新漏洞才返回非零
+        env:
+          PYTHON: python
+        run: bash scripts/security-audit.sh
+
   frontend:
     name: 前端构建与 lint
     runs-on: ubuntu-latest
@@ -195,9 +227,10 @@ jobs:
       - uses: actions/checkout@v4
 
       # 部署脚本是 sh/bash，本地开发在 Windows 上根本跑不到，只有 CI 能守住语法。
+      # scripts/ 下的运维脚本同理（security-audit.sh 等）。
       - name: 部署脚本语法检查
         run: |
-          for f in deploy/*.sh; do
+          for f in deploy/*.sh scripts/*.sh; do
             echo "== $f"
             bash -n "$f"
           done

@@ -1,0 +1,117 @@
+# 依赖升级自动化。
+#
+# 为什么需要：`scripts/security-audit.sh` 只能**发现**依赖里的已知漏洞，
+# 不能替你升级。没有 dependabot 的话，漏洞清单会一直原地不动——
+# 发现了问题但没人处理，等于没发现。
+#
+# 策略上刻意保守：
+#   - 安全更新单独成组，优先合入；
+#   - LangChain 生态（langchain / langchain-core / langchain-openai /
+#     langchain-text-splitters）在 requirements.txt 里是强耦合钉死的，
+#     分组更新且限制频率，避免单包升级造成版本不兼容；
+#   - GitHub Actions 也纳入检查（action 本身也有版本漏洞）。
+version: 2
+
+updates:
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - backend
+    groups:
+      # 安全补丁优先，单独一个 PR，方便快速 review 合并
+      security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      # LangChain 生态必须整组升：单独升一个会破坏版本兼容
+      # （requirements.txt 里钉死 langchain-core==0.3.40 就是这个原因）
+      langchain:
+        patterns:
+          - "langchain*"
+          - "langsmith"
+      # 其余非安全更新合并成一个 PR，减少噪音
+      minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - frontend
+    groups:
+      # Vue / Vite 生态一起升，避免 plugin 与 core 版本错配
+      vue-vite:
+        patterns:
+          - "vue*"
+          - "@vitejs/*"
+          - "vite*"
+          - "vitest*"
+      test-tooling:
+        patterns:
+          - "@playwright/*"
+          - "@vue/test-utils"
+          - "jsdom"
+      eslint:
+        patterns:
+          - "eslint*"
+          - "@eslint/*"
+      minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: npm
+    directory: /admin
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - admin
+    groups:
+      vue-vite:
+        patterns:
+          - "vue*"
+          - "@vitejs/*"
+          - "vite*"
+      minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - ci
+
+  # Docker 基础镜像（python:3.11-slim / node / nginx / mysql / redis）
+  # 也有过期风险，但自动开 PR 噪音较大，改成季度检查。
+  - package-ecosystem: docker
+    directories:
+      - /backend
+      - /web
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    labels:
+      - dependencies
+      - docker

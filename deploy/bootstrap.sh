@@ -269,6 +269,32 @@ wait_service_healthy() {
 wait_service_healthy mysql 240
 wait_service_healthy redis 60
 
+# ---------------------------------------------------------- 8a. 迁移前备份
+#
+# 本来这里直接 `alembic upgrade head`。但迁移里有真实的 DROP COLUMN / DROP TABLE
+# （见 alembic/versions/2026_09_07_mall_upgrade.py），升级失败时数据不可恢复——
+# docs/interview-qa.md 里早就承认了「生产回滚前必须先备份」，但脚本一直没实现。
+#
+# 只在**已存在数据**时才备份：首次部署库是空的，备份没有意义还会让人误会。
+EXISTING_TABLES="$("${COMPOSE[@]}" exec -T mysql sh -c \
+  'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot -N -B \
+     -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=\"$MYSQL_DATABASE\""' \
+  2>/dev/null | tr -d '\r' || echo 0)"
+
+if [ "${EXISTING_TABLES:-0}" -gt 0 ]; then
+  log "检测到已有数据库（${EXISTING_TABLES} 张表），迁移前先备份"
+  if ! BACKUP_DIR="${BACKUP_DIR:-./backups}" bash deploy/backup.sh; then
+    echo "备份失败。**建议中止**：迁移可能有破坏性变更，没有备份就升级风险很高。" >&2
+    if [ -z "${MALL_SKIP_BACKUP_CHECK:-}" ]; then
+      echo "确认无备份继续，请设置 MALL_SKIP_BACKUP_CHECK=1 重跑。" >&2
+      exit 1
+    fi
+    echo "已按 MALL_SKIP_BACKUP_CHECK=1 继续（自行承担风险）。" >&2
+  fi
+else
+  log "数据库为空（首次部署），跳过迁移前备份"
+fi
+
 # ---------------------------------------------------------------- 8. 初始化
 
 log "初始化数据库并预热模型（首次要下载约 100MB 的 BGE，请耐心等）"

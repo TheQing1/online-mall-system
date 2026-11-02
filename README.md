@@ -30,8 +30,13 @@
   结构化日志（`rewritten_query`、`retrieval_ms`、`best_score`、`ttft_ms`、
   `prompt_tokens`…），**一次问答即可回答「慢在哪、为什么答不上、花了多少钱」**；
   配 4 块 Grafana 面板与 3 条 AI 专属告警，专门盯「不报错但答得越来越差」的静默劣化。
-- **交付**：一条命令从裸机部署到线上（校验配置 → 构建 → 迁移播种 → 预热模型 → 起服务 →
-  自检），有域名则自动签发并续期 HTTPS 证书。
+- **交付**：一条命令从裸机部署到线上（校验配置 → 备份 → 构建 → 迁移播种 → 预热模型 →
+  起服务 → 自检），有域名则自动签发并续期 HTTPS 证书；配套 `backup.sh` / `rollback.sh`
+  实现**可回滚的部署**（迁移前自动备份、恢复前校验完整性）。
+- **依赖安全治理**：`pip-audit` 扫描进 CI，采用**基线模式**——新增漏洞立即失败，
+  存量漏洞集中登记并逐条说明「为什么不升、什么时候必须升」（见
+  [`scripts/BASELINE.md`](scripts/BASELINE.md)），配 Dependabot 自动升级。
+  **只防自己写的代码、不防第三方依赖，是很典型的安全盲区。**
 
 ## 界面速览
 
@@ -171,6 +176,32 @@ BASE_URL=https://你的域名 sh deploy/smoke.sh   # 从用户入口走一遍关
 sudo bash deploy/reset-demo.sh                # 被写乱后一键恢复初始数据
 ```
 
+### 备份与回滚
+
+`bootstrap.sh` 在跑 `alembic upgrade head` **之前会自动备份数据库**——因为迁移里
+有真实的 `DROP COLUMN` / `DROP TABLE`，升级失败时数据不可恢复。首次部署（库为空）
+会跳过这一步。
+
+也可以手动操作：
+
+```bash
+bash deploy/backup.sh                  # 备份，默认保留最近 10 份
+bash deploy/rollback.sh                # 列出可用备份
+bash deploy/rollback.sh --latest       # 恢复最近一份
+bash deploy/rollback.sh --latest --dry-run   # 先看会做什么
+```
+
+两条设计上的讲究：
+
+- **备份产物要能被验证**：只写文件不算备份。`backup.sh` 会做 `gzip -t` 完整性检查、
+  断言转储里含 `CREATE TABLE`，并生成 `.sha256`；`rollback.sh` 恢复前会校验它——
+  「备份了但恢复不了」比没有备份更糟，因为它给了你错误的信心。
+- **回滚前先备份现状**：`rollback.sh` 会先给当前库做一份快照再覆盖。万一选错了
+  备份文件，还有后悔的余地。
+
+> 本脚本只恢复**数据**。如果事故起因是代码，还需要 `git checkout <commit>` 后重新
+> build——两者是不同的事，不要混为一谈。
+
 > 部署这套东西的设计取舍、踩过的坑、以及「哪些环节真的验证过」，
 > 都写在 [`docs/engineering-notes.md`](docs/engineering-notes.md)。
 
@@ -264,7 +295,8 @@ CI 里有一个独立的 `e2e` 任务跑这套用例（起 MySQL + Redis + API +
 │  ├─ tests             # 118 个 pytest 用例
 │  ├─ loadtest/         # Locust 压测脚本
 │  └─ static/products/  # 商品图（文件名 = 商品 slug）
-├─ deploy/              # 部署脚本、配置校验、部署自检、Caddyfile
+├─ deploy/              # 部署脚本、配置校验、部署自检、备份与回滚、Caddyfile
+├─ scripts/             # 依赖漏洞扫描与基线（BASELINE.md）
 ├─ docs/                # 工程笔记、面试问答、简历文案、截图
 ├─ web/                 # Nginx 配置 + 前端产物 Dockerfile
 └─ docker-compose*.yml  # 基线 / 生产加固 / 自动 HTTPS
@@ -274,6 +306,12 @@ CI 里有一个独立的 `e2e` 任务跑这套用例（起 MySQL + Redis + API +
 
 诚实地列在这里，避免面试时被动：
 
+- **依赖里有 39 条已知漏洞未修**（`scripts/BASELINE.md` 有逐条说明）。主要是
+  `starlette` / `python-multipart` 受 FastAPI 0.115 的版本约束、以及互相强耦合的
+  `langchain` 生态；`python-jose` 那 4 条改造成本低，应优先处理。
+  这些 CVE 的利用前提多为特定配置，本项目 demo 形态下暴露面有限，但**上生产前必须处理**；
+- 备份脚本只覆盖 MySQL。Redis（缓存/限流状态）与上传的商品图没有纳入备份范围；
+- 回滚只回滚数据，代码回滚需要手动 `git checkout` + 重新构建，没有做成一键脚本；
 - 重排只在 CPU 上跑（每条问题约 0.6 秒），也没做重排结果缓存；上生产要么换 GPU，
   要么换更小的 cross-encoder；
 - 前端仍是纯 JS、没有 TypeScript；单测覆盖了 SSE 分帧与拦截器两块核心胶水逻辑，

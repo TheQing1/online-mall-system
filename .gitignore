@@ -42,5 +42,10 @@ backend/chroma_db/
 .vscode/
 .DS_Store
 
+# ---- 数据库备份 ----
+# deploy/backup.sh 默认写到这里。备份里是真实业务数据，
+# 绝不应该进版本库（既占空间又可能泄露用户信息）。
+backups/
+
 # ---- 内部规划草稿 ----
 .superpowers/
