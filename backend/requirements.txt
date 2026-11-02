@@ -12,7 +12,7 @@ alembic==1.13.0
 # 2.12 ~ 2.15），换上之后漏洞反而比 python-jose 的 4 条更多——说明「换库」
 # 不等于「更安全」，必须用扫描结果验证。2.15.1 是当前修复最全的版本，0 条。
 pyjwt==2.15.1
-bcrypt==4.2.0
+bcrypt==5.0.0
 python-multipart==0.0.9
 pydantic==2.9.0
 pydantic-settings==2.5.0
