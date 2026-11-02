@@ -40,4 +40,4 @@ prometheus-client==0.26.0
 # 顺手升到 1.x（升上去 Router 会少掉 on_startup 参数，应用直接起不来）
 starlette==0.38.6
 python-dotenv==1.0.1
-aiofiles==24.1.0
+aiofiles==25.1.0
