@@ -301,7 +301,7 @@ jobs:
       # 后端的依赖里带 sentence-transformers / torch，镜像接近 2GB；
       # 首次构建慢，之后靠 GHA 层缓存基本只重建 COPY 那几层。
       - name: 构建后端镜像
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: backend/Dockerfile
@@ -311,7 +311,7 @@ jobs:
           cache-to: type=gha,scope=backend,mode=min
 
       - name: 构建前端与 nginx 镜像
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: web/Dockerfile
