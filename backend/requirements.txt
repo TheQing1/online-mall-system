@@ -38,6 +38,6 @@ redis==8.1.0
 prometheus-client==0.26.0
 # FastAPI 0.115 的约束是 starlette>=0.37.2,<0.39.0；显式钉住避免被别的包
 # 顺手升到 1.x（升上去 Router 会少掉 on_startup 参数，应用直接起不来）
-starlette==0.38.6
+starlette==1.10.0
 python-dotenv==1.0.1
 aiofiles==24.1.0
