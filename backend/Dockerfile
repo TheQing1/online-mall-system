@@ -1,5 +1,5 @@
 # 固定到 bookworm 发行版，避免 python:3.11-slim 随上游滚动（3.11.x 补丁 / trixie 切换）导致构建不可复现。
-FROM python:3.11-slim-bookworm
+FROM python:3.15-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
