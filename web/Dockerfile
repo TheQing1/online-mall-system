@@ -21,7 +21,7 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm ci --registry="$NPM_REGISTRY"; else npm 
 COPY admin .
 RUN npm run build
 
-FROM nginx:1.27-alpine
+FROM nginx:1.31-alpine
 COPY --from=frontend-builder /app/frontend/dist /usr/share/nginx/html
 COPY --from=admin-builder /app/admin/dist /usr/share/nginx/html/admin
 COPY web/nginx.conf /etc/nginx/conf.d/default.conf
