@@ -22,6 +22,19 @@ export const useChatStore = defineStore('chat', () => {
     localStorage.setItem('chat_session_id', sessionId.value)
   }
 
+  /** 当前会话是否已经产生过消息（决定 init 要不要去服务端拉历史）。
+   *
+   * 服务端在收到第一条消息时才创建会话记录，所以「未聊过」= 拉历史必然 404。
+   * 用一个 localStorage 标记代替试探性请求，既省一次往返，也不会在控制台
+   * 留下一条 404。标记随 sessionId 一起重置。 */
+  function hasChatted() {
+    return localStorage.getItem('chat_has_chatted') === '1'
+  }
+
+  function markChatted() {
+    localStorage.setItem('chat_has_chatted', '1')
+  }
+
   function toggle() {
     isOpen.value = !isOpen.value
     if (isOpen.value) init()
@@ -31,10 +44,39 @@ export const useChatStore = defineStore('chat', () => {
     isOpen.value = false
   }
 
+  /** 统一的鉴权头：历史拉取与发消息必须用同一套，否则会出现
+   *  「能发新消息但看不到历史」的割裂（见 init 的注释）。 */
+  function authHeaders() {
+    const token = localStorage.getItem('token')
+    return token ? { Authorization: `Bearer ${token}` } : {}
+  }
+
   async function init() {
     if (loaded.value) return
+    // 会话是否存在过：服务端只在**收到第一条消息时**才创建会话记录
+    // （见 ai_chat.chat 里的 get_or_create_session）。还没聊过的新会话去拉历史
+    // 必然 404——虽然前端能容错，但浏览器控制台仍会记一条 "Failed to load
+    // resource: 404"，而 e2e 断言「控制台零报错」会因此失败。
+    // 这里直接跳过请求：没有消息就没有历史可拉，不必先问服务端要一个 404。
+    if (!hasChatted()) {
+      messages.value = []
+      loaded.value = true
+      return
+    }
     try {
-      const res = await fetch(`/api/v1/ai-chat/sessions/${sessionId.value}/messages`)
+      // 必须带 token。会话一旦绑定到某个用户（后端 chat_service.get_accessible_session），
+      // 匿名读取会直接 403；而下面的 catch 会把 403 静默成「历史为空」，
+      // 表现为「刷新页面后 AI 对话全没了」。修复前这里就是裸 fetch、没有头。
+      const res = await fetch(`/api/v1/ai-chat/sessions/${sessionId.value}/messages`, {
+        headers: authHeaders(),
+      })
+      if (res.status === 404) {
+        // 服务端记录已不存在（例如被清理），等同于没有历史
+        messages.value = []
+        loaded.value = true
+        return
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const history = await res.json()
       messages.value = history.map((m) => ({
         role: m.role,
@@ -43,6 +85,7 @@ export const useChatStore = defineStore('chat', () => {
       }))
       loaded.value = true
     } catch {
+      // 真正失败（断网 / 403 / 5xx）时不要把 loaded 置真：下次打开面板还会重试
       messages.value = []
     }
   }
@@ -53,14 +96,15 @@ export const useChatStore = defineStore('chat', () => {
     messages.value.push({ role: 'user', content: text, products: [] })
     messages.value.push({ role: 'assistant', content: '', products: [] })
     isTyping.value = true
+    // 从这一刻起服务端会存下这条消息，之后 init 就能正常拉到历史
+    markChatted()
 
-    const token = localStorage.getItem('token')
     try {
       const response = await fetch('/api/v1/ai-chat/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...authHeaders(),
         },
         body: JSON.stringify({ session_id: sessionId.value, message: text }),
       })
@@ -120,10 +164,9 @@ export const useChatStore = defineStore('chat', () => {
   async function newConversation() {
     // 清除历史会话，开一个新会话
     try {
-      const token = localStorage.getItem('token')
       await fetch(`/api/v1/ai-chat/sessions/${sessionId.value}`, {
         method: 'DELETE',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: authHeaders(),
       })
     } catch {
       // 删除失败也照样开新会话：本地状态才是用户直接感知到的东西
@@ -136,6 +179,8 @@ export const useChatStore = defineStore('chat', () => {
   function reset() {
     sessionId.value = newSessionId()
     persistSession()
+    // 新会话还没有任何消息，标记要一起清掉，否则会去拉一个必然 404 的历史
+    localStorage.removeItem('chat_has_chatted')
     messages.value = []
     loaded.value = false
     isTyping.value = false

@@ -96,8 +96,22 @@ test('AI 客服能打开并显示会话界面', async ({ page }) => {
 
   await page.goto('/')
   await settle(page)
-  await page.locator('.chat-trigger, .ai-chat-trigger, button:has(.el-icon)').first().click()
+
+  // 用 data-testid 而不是之前的 `.chat-trigger, .ai-chat-trigger, button:has(.el-icon)`：
+  // 那两个类名从来没存在过，最后的 `button:has(.el-icon)` 实际命中的是 Navbar 的
+  // 搜索按钮（关键词为空时 search() 直接 return，页面原地不动），于是这条用例
+  // 「点开了 AI 客服」其实一次都没打开过，却一直是绿的。
+  // 同类的坑本项目已经踩过一次（见上面搜索那条用例关于 ?keyword= 的注释）。
+  await page.getByTestId('ai-chat-fab').click()
   await settle(page)
+
+  // 断言窗口真的出现了，而不只是「点了一下没报错」
+  const chatWindow = page.getByTestId('ai-chat-window')
+  await expect(chatWindow).toBeVisible()
+  await expect(page.getByText('AI 智能客服')).toBeVisible()
+
+  // 断言快捷键问题入口存在：这一层能挡住「窗口渲染了但内容是空的」
+  await expect(page.locator('.quick-tag').first()).toBeVisible()
 
   await page.screenshot({ path: `${SHOTS}/mall-ai-chat.png` })
   expectCleanConsole(problems)

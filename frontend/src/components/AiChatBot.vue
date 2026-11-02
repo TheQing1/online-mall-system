@@ -1,10 +1,18 @@
 <template>
   <div class="ai-chatbot">
-    <div class="chat-fab" @click="chat.toggle()" v-if="!chat.isOpen">
+    <!-- data-testid 是给 e2e 用的稳定锚点。此前用例靠
+         `.chat-trigger, .ai-chat-trigger, button:has(.el-icon)` 定位，两个类都不存在，
+         最后命中 Navbar 的搜索按钮，于是「点开了 AI 客服」的用例其实什么都没点开。 -->
+    <div
+      class="chat-fab"
+      data-testid="ai-chat-fab"
+      @click="chat.toggle()"
+      v-if="!chat.isOpen"
+    >
       <el-icon :size="24"><ChatDotRound /></el-icon>
     </div>
 
-    <el-card class="chat-window" v-if="chat.isOpen" shadow="always">
+    <el-card class="chat-window" data-testid="ai-chat-window" v-if="chat.isOpen" shadow="always">
       <template #header>
         <div class="chat-header">
           <span>🛎️ AI 智能客服</span>
@@ -125,7 +133,14 @@ function scrollToBottom() {
   transition: transform 0.2s;
 }
 .chat-fab:hover { transform: scale(1.1); }
-.chat-window { width: 400px; height: 560px; display: flex; flex-direction: column; }
+/* 尺寸用 min() 而不是写死 400x560：在 375px 宽的手机上，写死的 400px
+   会直接横向溢出屏幕，整个客服窗有一截在视口外，连关闭按钮都点不到。
+   min() 让它在窄屏自动收缩成「屏幕宽 - 两侧留白」，大屏仍然是 400x560。 */
+.chat-window {
+  width: min(400px, calc(100vw - 32px));
+  height: min(560px, calc(100vh - 100px));
+  display: flex; flex-direction: column;
+}
 .chat-header { display: flex; justify-content: space-between; align-items: center; }
 .chat-messages { flex: 1; overflow-y: auto; padding: 8px 0; }
 .chat-empty { text-align: center; color: #666; padding: 30px 10px; font-size: 13px; line-height: 1.8; }
@@ -162,4 +177,15 @@ function scrollToBottom() {
 .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
 .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
 @keyframes typing { 0%,60%,100% { opacity: 0.3; } 30% { opacity: 1; } }
+
+@media (max-width: 768px) {
+  /* 手机上下留白收窄，尽量多给对话区高度 */
+  .ai-chatbot { bottom: 16px; right: 16px; }
+  .chat-window {
+    width: calc(100vw - 24px);
+    height: calc(100vh - 80px);
+  }
+  .chat-msg.user .msg-bubble,
+  .chat-msg.assistant .msg-bubble { max-width: 92%; }
+}
 </style>

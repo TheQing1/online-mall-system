@@ -260,9 +260,18 @@ async function handleSave() {
     ElMessage.warning('请完整填写 SKU 名称、价格和库存')
     return
   }
+  // 顶层 price / stock 是商品维度「默认展示价 / 总库存」，后端 ProductCreate 里
+  // price 必填（ProductUpdate 才是可选）。服务端随后会用 SKU 汇总覆盖这两个值
+  // （product_service._sync_product_aggregates），所以这里按同样的口径算一遍：
+  // 前端传什么其实不影响最终落库，但**必须传**，否则创建接口直接 422。
+  // 之前只传了 skus[].price，导致「新增商品」必然失败，而「编辑」走可选 schema 所以正常。
+  const minPrice = Math.min(...form.skus.map((s) => Number(s.price)))
+  const totalStock = form.skus.reduce((sum, s) => sum + Number(s.stock), 0)
   const payload = {
     name: form.name.trim(),
     description: form.description || null,
+    price: minPrice,
+    stock: totalStock,
     images: form.images,
     category_id: form.category_id,
     status: form.statusOn ? 'on' : 'off',
