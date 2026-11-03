@@ -14,9 +14,15 @@ export function watchConsole(page) {
   const problems = []
   page.on('console', (msg) => {
     const text = msg.text()
-    // Vite 开发服务器自己的消息（依赖预构建、HMR 重载）不是应用问题；
+    // Vite 开发服务器自己的消息（依赖预构建、HMR 重载）不是应用问题。
     // 首次启动时它可能让页面重载一次，不过滤掉就会变成偶发失败。
     if (text.includes('[vite]')) return
+    // 504 Outdated Optimize Dep 也是 **dev server 专有** 的噪音：
+    // 第一次请求某个依赖时，Vite 正在做依赖预构建，会先返回 504 让浏览器重试；
+    // 重试后同一次页面加载就正常了。
+    // 关键区分：它只在 dev server 上出现，**production build（e2e 在 CI 里跑的）
+    // 不可能出现**——CI 跑的是 preview + 构建产物，所以过滤掉它不会掩盖真实问题。
+    if (text.includes('Outdated Optimize Dep')) return
     const suspicious =
       text.includes('Failed to resolve component') ||
       text.includes('Failed to resolve directive')

@@ -30,6 +30,7 @@ _LIMIT_SETTINGS = {
     "login": "rate_limit_login",
     "order": "rate_limit_order",
     "chat": "rate_limit_chat",
+    "suggest": "rate_limit_suggest",
 }
 
 

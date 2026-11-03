@@ -88,6 +88,10 @@ class Settings(BaseSettings):
     rate_limit_login: int = 10
     rate_limit_order: int = 20
     rate_limit_chat: int = 20
+    # 搜索建议：一次输入会产生多次请求（每敲一个字一次，前端另有防抖），
+    # 配额给得比普通接口宽，但仍必须单独限流——
+    # 否则它会成为绕过全站配额打库的入口。
+    rate_limit_suggest: int = 120
 
     # --- 可观测性 ---
     # true 时输出单行 JSON 日志（便于日志系统采集），默认人类可读

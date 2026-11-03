@@ -4,17 +4,7 @@
       <router-link to="/" class="logo">🛍️ Online Mall</router-link>
     </div>
     <div class="nav-center">
-      <el-input
-        v-model="keyword"
-        placeholder="搜索商品..."
-        size="large"
-        clearable
-        @keyup.enter="search"
-      >
-        <template #append>
-          <el-button @click="search" :icon="Search" />
-        </template>
-      </el-input>
+      <SearchBox />
     </div>
     <div class="nav-right">
       <router-link to="/cart">
@@ -44,16 +34,16 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Search, ShoppingCart } from '@element-plus/icons-vue'
+import { ShoppingCart } from '@element-plus/icons-vue'
+import SearchBox from '@/components/SearchBox.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useCartStore } from '@/stores/cart'
 
 const router = useRouter()
 const auth = useAuthStore()
 const cart = useCartStore()
-const keyword = ref('')
 
 const user = computed(() => auth.user)
 const cartCount = computed(() => cart.count)
@@ -67,12 +57,6 @@ function loadCart() {
 
 onMounted(loadCart)
 watch(() => auth.isLoggedIn, loadCart)
-
-function search() {
-  if (keyword.value.trim()) {
-    router.push({ path: '/search', query: { q: keyword.value.trim() } })
-  }
-}
 
 function logout() {
   auth.logout()

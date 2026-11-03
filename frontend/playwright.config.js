@@ -26,7 +26,8 @@ export default defineConfig({
     {
       name: 'mall',
       // 注意：testMatch 匹配的是完整路径，不能写 ^ 锚定文件名
-      testMatch: /mall(-styles)?\.spec\.js$/,
+      // search-suggest 是新加的搜索自动补全用例，同属商城前台
+      testMatch: /(mall(-styles)?|search-suggest)\.spec\.js$/,
       use: { baseURL: 'http://localhost:5173' },
     },
     {

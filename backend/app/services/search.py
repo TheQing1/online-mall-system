@@ -32,7 +32,7 @@ import jieba
 from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Query, Session
 
-from app.models.product import Category, Product
+from app.models.product import Category, Product, ProductStatus
 from app.models.sku import ProductSku
 from app.services.search_synonyms import load_synonyms
 
@@ -200,3 +200,118 @@ def apply_product_search(db: Session, base_query: Query, keyword: Optional[str])
             return relaxed, name_relevance(groups)
 
     return strict, name_relevance(groups)
+
+
+# --- 搜索建议（autocomplete）---
+#
+# 与真正的检索分开实现，因为两者的目标不同：
+#   - 检索要「**找全**」：宁可多召回再由相关度排序，所以走同义词、AND→OR 兜底；
+#   - 建议要「**补全**」：用户敲了前缀，就该看到以这个前缀开头的候选，
+#     而不是一堆「因为近义才相关」的东西。给错候选比没候选更糟——
+#     用户会顺着它去搜，然后得到莫名其妙的空结果。
+#
+# 因此这里的匹配规则刻意简单：**归一化后的前缀/子串匹配**，不做同义词扩展。
+# 唯一用到同义词的地方是「反向」的：用户敲「鞋子」时，也把映射到「鞋」的
+# 商品名候选带出来——这是补全该做的事，不是检索的事。
+
+
+def _suggestion_candidates(db: Session, limit_titles: int = 200) -> List[dict]:
+    """收集候选池：商品名 + 分类名 + SKU 名。
+
+    候选池是有上限的（商品名取销量前 N），因为自动补全要「快」：
+    数据量大了以后这里应该换成专门的补全索引（如 ES completion suggester），
+    或者把候选物化成一张表。当前 59 个商品直接查库完全够用。
+    """
+    candidates: List[dict] = []
+
+    for product in (
+        db.query(Product.name, Product.id)
+        .filter(Product.status == ProductStatus.ON)
+        .order_by(Product.sales.desc(), Product.id.asc())
+        .limit(limit_titles)
+        .all()
+    ):
+        candidates.append(
+            {"text": product.name, "type": "product", "product_id": product.id}
+        )
+
+    for category in db.query(Category.name, Category.id).all():
+        candidates.append(
+            {"text": category.name, "type": "category", "category_id": category.id}
+        )
+
+    # SKU 名里有「白色 16+1TB」这类，直接当前缀补全没有价值，
+    # 但品牌/型号类词（如「钛灰」）偶尔会被用户当关键词敲，保留一部分。
+    for (sku_name,) in (
+        db.query(ProductSku.name).distinct().limit(limit_titles).all()
+    ):
+        if sku_name and sku_name != "默认规格":
+            candidates.append({"text": sku_name, "type": "sku"})
+
+    return candidates
+
+
+def suggest(keyword: str, limit: int = 8, db: Optional[Session] = None) -> List[dict]:
+    """按用户已输入的内容返回补全候选。
+
+    排序规则（越靠前越该被选中）：
+
+    1. **前缀命中**优先于中间命中——用户敲「手机」时，「手机数码」比
+       「双卡双待手机」更可能是他想找的。
+    2. 同类里**短词优先**——短词是更「通用」的概念。
+    3. 商品名 > 分类名 > SKU 名：商品是最终目标，分类是导航。
+
+    返回形如 ``[{"text": "手机数码", "type": "category"}, ...]``。
+    """
+    if db is None:
+        raise ValueError("suggest() 需要 db 会话")
+
+    query = normalize(keyword or "")
+    if not query:
+        return []
+
+    # 同义词的反向查找：用户敲「鞋子」，把映射到「鞋」的候选也带出来。
+    # 注意方向——是「这个词的同义词有哪些」，不是「把候选扩展成近义词」。
+    synonym_terms = set(variants_for(keyword)) - {query}
+    # 中文单字同义词是**有效**的（鞋 / 帽 / 袜 / 裤 / 裙 都在同义词表里），
+    # 一开始写了 `len(t) >= 2` 想把噪音过滤掉，结果把「鞋子 → 鞋 → 运动鞋」
+    # 这条链整段关掉了。噪音的正确处理方式是靠排序把它排到最后，
+    # 而不是在匹配阶段就把候选排除掉——排除掉就再也回不来了。
+    synonym_terms = {t for t in synonym_terms if t}
+
+    ranked: List[tuple] = []
+    seen_texts = set()
+    for candidate in _suggestion_candidates(db):
+        text = candidate["text"]
+        if not text or text in seen_texts:
+            continue
+        normalized = normalize(text)
+        if not normalized:
+            continue
+
+        if normalized.startswith(query):
+            rank = (0, len(text))
+        elif query in normalized:
+            rank = (1, len(text))
+        elif any(normalized.startswith(t) or t in normalized for t in synonym_terms):
+            # 同义词命中的排最后：它是「可能相关」，不如字面命中可靠
+            rank = (2, len(text))
+        else:
+            continue
+
+        # 同 rank 内按类型加权：商品 > 分类 > SKU
+        type_weight = {"product": 0, "category": 1, "sku": 2}.get(candidate["type"], 3)
+        ranked.append((rank[0], type_weight, rank[1], candidate))
+        seen_texts.add(text)
+
+    ranked.sort(key=lambda item: (item[0], item[1], item[2]))
+
+    results: List[dict] = []
+    for *_, candidate in ranked[:limit]:
+        item = {"text": candidate["text"], "type": candidate["type"]}
+        if "product_id" in candidate:
+            item["product_id"] = candidate["product_id"]
+        if "category_id" in candidate:
+            item["category_id"] = candidate["category_id"]
+        results.append(item)
+    return results
