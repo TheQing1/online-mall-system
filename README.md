@@ -171,7 +171,7 @@ Redis 是可选的：不启也能跑，缓存/限流/锁会自动降级，只是
 
 ## 部署到服务器
 
-一台能跑 Docker 的 Linux 服务器（内存 ≥ 2G）就够了，有域名则自动配 HTTPS：
+一台能跑 Docker 的 Linux 服务器（**内存建议 ≥ 4G**，见下方实测）就够了，有域名则自动配 HTTPS：
 
 ```bash
 git clone https://github.com/TheQing1/online-mall-system.git && cd online-mall-system
@@ -195,6 +195,34 @@ Let's Encrypt 申请并续期证书，前提是域名已解析到本机且 80/44
 BASE_URL=https://你的域名 sh deploy/smoke.sh   # 从用户入口走一遍关键链路
 sudo bash deploy/reset-demo.sh                # 被写乱后一键恢复初始数据
 ```
+
+### 资源占用（Docker 实测）
+
+用 `docker stats` 在完整起栈后实测（`docker compose up -d`，模型加载完毕并跑过几轮
+AI 问答后的稳态）：
+
+| 服务 | 常驻内存 | 说明 |
+|---|---|---|
+| backend | **~660 MB** | API + 本地 BGE 模型（加载后比空跑多约 360 MB） |
+| mysql | ~460 MB | 8.0 默认 `innodb_buffer_pool_size=128MB` |
+| worker | ~95 MB | 只跑关单任务，**不加载模型** |
+| web (nginx) | ~17 MB | 静态产物 + 反代 |
+| redis | ~12 MB | 缓存/限流/锁状态 |
+| **小计** | **~1.25 GB** | 默认部署（不含监控） |
+| + 监控栈 | **+85 MB** | Prometheus 30 + Grafana 57（`--profile observability`） |
+| + 重排模型 | **+650 MB** | 仅当 `RAG_RERANK_ENABLED=true` |
+
+所以：**2G 能启动但没余量**——模型首次加载时 RSS 会冲到 1.3G 上下，再遇到构镜像或
+系统缓存就容易 OOM。**4G 是稳的起点**；要开重排模型或跑 CI/构建，建议 6G。
+
+两个值得注意的点：
+
+- **backend 与 worker 是同一镜像的两个进程，但只有 backend 加载模型**。
+  也因此**不能靠加 backend 副本来水平扩展**——每个副本都要再吃 660 MB。
+  真要扩，得把 embedding 拆成独立服务。
+- 重排模型（`bge-reranker-base`，约 1.1GB）比 embedding 模型大得多，
+  实测加载后从 504 MB 涨到 1139 MB。它的收益是 recall@3 98% → 100%，
+  所以做成了开关而不是默认开——内存紧的机器不该为这 2% 付费。
 
 ### 备份与回滚
 
