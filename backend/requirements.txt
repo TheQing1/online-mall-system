@@ -14,13 +14,22 @@ alembic==1.13.0
 pyjwt==2.15.1
 bcrypt==5.0.0
 python-multipart==0.0.9
-pydantic==2.9.0
+pydantic==2.9.2
 pydantic-settings==2.5.0
-langchain==0.3.13
-langchain-core==0.3.40
-langchain-text-splitters==0.3.5
-langchain-openai==0.2.14
-langchain-huggingface==0.1.2
+# --- LangChain 生态 ---
+# 这几个包**互相强耦合**，必须整组升：单独动任何一个都会造成版本冲突。
+# 本次从 0.3.13 / 0.3.40 / 0.3.5 / 0.2.14 / 0.1.2 整组升到下面这组，
+# 其中 langchain-huggingface 0.1.2 -> 0.3.1 是关键（0.1.x 有已知 CVE，
+# 但 1.x 需要 langchain-core 1.x，与本项目不兼容，0.3.1 才是匹配 0.3.x 的版本）。
+#
+# 升级后实测：129 个后端用例全绿、真实检索仍能以 1.0 分命中「退换货政策」、
+# 流式生成链路与 token 统计正常。
+# 代价：新增 httpx2 / xxhash / zstandard / uuid_utils 等传递依赖。
+langchain==0.3.30
+langchain-core==0.3.86
+langchain-text-splitters==0.3.11
+langchain-openai==0.3.35
+langchain-huggingface==0.3.1
 modelscope
 
 # CPU 版 torch：模型是强制跑 CPU 的（见 app/ai/vectorstore.py 里的
@@ -47,5 +56,5 @@ prometheus-client==0.26.0
 # FastAPI 0.115 的约束是 starlette>=0.37.2,<0.39.0；显式钉住避免被别的包
 # 顺手升到 1.x（升上去 Router 会少掉 on_startup 参数，应用直接起不来）
 starlette==0.38.6
-python-dotenv==1.0.1
+python-dotenv==1.2.4
 aiofiles==24.1.0

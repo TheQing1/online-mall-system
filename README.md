@@ -316,11 +316,13 @@ CI 里有一个独立的 `e2e` 任务跑这套用例（起 MySQL + Redis + API +
 
 诚实地列在这里，避免面试时被动：
 
-- **依赖里有 34 条已知漏洞未修**（`scripts/BASELINE.md` 有逐条说明）。主要是
-  `starlette` / `python-multipart` 受 FastAPI 0.115 的版本约束、以及互相强耦合的
-  `langchain` 生态。这些 CVE 的利用前提多为特定配置，本项目 demo 形态下暴露面有限，
-  但**上生产前必须处理**。认证用的 `python-jose`（当时风险最高，承担全部认证）
-  已迁到 PyJWT 2.15.1，消掉 5 条；
+- **依赖里有 23 条已知漏洞未修**（`scripts/BASELINE.md` 有逐条说明）。
+  绝大多数是 `starlette` / `python-multipart`（受 FastAPI 0.115 的版本约束，
+  升级必须连同框架一起跨大版本），另有 5 条散在 `langchain` 生态的 0.3.x 残项
+  （修复需升到 1.x，属独立迁移）。这些 CVE 的利用前提多为特定配置，
+  本项目 demo 形态下暴露面有限，但**上生产前必须处理**。
+  已完成的治理：`python-jose` → PyJWT 消掉 5 条；LangChain 生态整组升级
+  （含 `langchain-huggingface` 0.1.2→0.3.1）再消掉 6 条。累计 39 → 23 条；
 - 备份脚本只覆盖 MySQL。Redis（缓存/限流状态）与上传的商品图没有纳入备份范围；
 - 回滚只回滚数据，代码回滚需要手动 `git checkout` + 重新构建，没有做成一键脚本；
 - 重排只在 CPU 上跑（每条问题约 0.6 秒），也没做重排结果缓存；上生产要么换 GPU，

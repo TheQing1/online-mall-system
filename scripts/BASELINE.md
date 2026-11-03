@@ -6,8 +6,12 @@
 ## 现状
 
 用 `pip-audit -r backend/requirements.txt` 扫描的结果：
-**34 条漏洞，分布在 9 个包**（不含 pip / setuptools 这类工具链自身的条目）。
-> 建档时是 39 条 / 11 个包，`python-jose` → PyJWT 迁移后降到现在的数字（见 D 组）。
+**23 条漏洞，分布在 7 个包**（不含 pip / setuptools 这类工具链自身的条目）。
+
+> 建档时是 **39 条 / 11 个包**，经历两次依赖治理后降到现在的数字：
+> - `python-jose` → PyJWT 迁移，消掉 5 条（见 D 组）；
+> - LangChain 生态整组升级（0.3.13 → 0.3.30，含 `langchain-huggingface`
+>   0.1.2 → 0.3.1），再消掉 6 条并移除 2 个包（见 E 组）。
 
 基线文件：`scripts/security-baseline.json`（由脚本自动生成，请勿手改）。
 
@@ -38,23 +42,25 @@ bash scripts/security-audit.sh --update   # 重新生成基线（需人工 revie
 风险说明：这些 CVE 的利用前提多为「特定配置 + 可访问的特定入口」。本项目是
 单机 demo 形态、无真实用户数据，实际暴露面有限——但**这不等于可以永远不升**。
 
-### B. AI 依赖链，升级需连同 LangChain 生态一起动
+### B. AI 依赖链（已整组升级，仅剩少量残留）
 
-`langchain` / `langchain-core` / `langchain-openai` / `langchain-text-splitters` /
-`langsmith` —— 共 15 条。
+`langchain`(1) / `langchain-core`(2) / `langchain-openai`(1) / `langchain-text-splitters`(1)
+——共 5 条，且都是**更高 major 才能修**的那种（需要 langchain 1.x）。
+`langsmith` 与 `langchain-huggingface` 已随整组升级清零，见 E 组。
 
-这几个包**互相强耦合**，单独升一个会破坏版本兼容（项目 `requirements.txt` 里
-专门钉死了 `langchain-core==0.3.40` 就是为了这个）。升级需要整组一起动，
-并重新验证 RAG 链路（检索、重排、流式生成），成本较高。
+剩下这 5 条的处理口径：修它们需要跨到 langchain 1.x，而 1.x 的 API 与 0.3.x
+差异较大（工具调用、消息类型、回调签名都有变更）。当前 0.3.30 已经是 0.3 系列
+里修复最全的版本，继续升就是一次独立的框架迁移，不适合顺手做。
 
 ### C. 可单独升级，留到专门排期
 
 | 包 | 当前 | 建议 |
 |---|---|---|
 | `chromadb` | 1.5.9 | 4 条，向量库；升级需重新验证索引读写 |
-| `python-dotenv` | 1.0.1 | 1 条，影响很小，可随时升 |
+| `starlette` | 0.38.6 | 7 条，受 FastAPI 0.115 约束（见 A 组） |
+| `python-multipart` | 0.0.9 | 7 条，与 starlette 同一条链路（见 A 组） |
 
-### D. 已解决（保留记录，说明这个机制真的在用）
+### D. 已解决①：`python-jose` → PyJWT
 
 **`python-jose` 3.3.0 → PyJWT 2.15.1**：4 条 CVE + 其依赖 `ecdsa` 的 1 条，共 5 条已消除。
 
@@ -71,7 +77,37 @@ bash scripts/security-audit.sh --update   # 重新生成基线（需人工 revie
 说明「换一个更活跃的库」不等于「更安全」——**必须用扫描结果验证，而不是凭印象**。
 最终选 `2.15.1`，0 条。
 
-结果：漏洞总数 **39 → 34**，包数 11 → 9。
+### E. 已解决②：LangChain 生态整组升级
+
+| 包 | 原版本 | 现版本 |
+|---|---|---|
+| `langchain` | 0.3.13 | **0.3.30** |
+| `langchain-core` | 0.3.40 | **0.3.86** |
+| `langchain-text-splitters` | 0.3.5 | **0.3.11** |
+| `langchain-openai` | 0.2.14 | **0.3.35** |
+| `langchain-huggingface` | 0.1.2 | **0.3.1** |
+| `python-dotenv` | 1.0.1 | **1.2.4** |
+| `pydantic` | 2.9.0 | **2.9.2** |
+
+关键点是 `langchain-huggingface`：它的 **1.x 需要 langchain-core 1.x**，
+与本项目不兼容（实测 `ResolutionImpossible`），但 **0.3.1 才是匹配 0.3.x 的版本**
+——依赖解析器不会主动选它，必须整组升才会落到这里。
+
+验证（不是只看版本号）：
+- 129 个后端用例全绿；
+- 真实检索链路仍以 **1.0000 分**命中「退换货政策」；
+- 流式生成、token 统计、LangChain 全部组件导入正常。
+
+代价：新增 `httpx2` / `xxhash` / `zstandard` / `uuid_utils` 等传递依赖。
+收益：漏洞 **34 条 → 23 条**，包数 **9 → 7**。
+
+### 累计效果
+
+| 阶段 | 漏洞数 | 包数 |
+|---|---|---|
+| 建档 | 39 | 11 |
+| PyJWT 迁移后 | 34 | 9 |
+| LangChain 整组升级后 | **23** | **7** |
 
 ## 为什么当初会漏掉这件事
 
