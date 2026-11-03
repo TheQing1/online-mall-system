@@ -231,13 +231,17 @@ services:
     # 这样本地不配通知渠道也能起，只是推送会失败并在日志里留下记录。
     environment:
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-http://127.0.0.1:9099/disabled}
-    command:
-      - "--config.file=/etc/alertmanager/alertmanager.yml"
-      - "--storage.path=/alertmanager"
-      # 关键：Alertmanager 的配置文件**默认不做环境变量替换**，
-      # 直接写 ${ALERT_WEBHOOK_URL} 会解析失败、容器起不来。
-      # 必须显式加这个参数才会展开 ${VAR}（v0.22+ 支持）。
-      - "--config.expand-env=true"
+    # Alertmanager **不支持**配置文件里的环境变量替换（v0.28.0 没有
+    # --config.expand-env 这个 flag，实测加了会 unknown long flag 无限重启）。
+    # 所以这里用 entrypoint 在启动前把占位符替换掉再交给 alertmanager。
+    # 注意 sed 用 | 作分隔符：URL 里全是 /，用 / 会切坏。
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        sed "s|\$${ALERT_WEBHOOK_URL}|$${ALERT_WEBHOOK_URL}|g" \
+            /etc/alertmanager/alertmanager.yml > /tmp/alertmanager.yml
+        exec /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager
     ports:
       - "9093:9093"
     healthcheck:
