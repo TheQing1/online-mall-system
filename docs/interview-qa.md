@@ -3,7 +3,7 @@
 > 配套项目：基于 LangChain + RAG + DeepSeek 的 B2C 在线商城
 > 技术栈：Vue3 + Element Plus + Vite + Pinia / FastAPI + SQLAlchemy 2.0 + Pydantic v2 /
 > MySQL 8.0 / ChromaDB / LangChain 0.3.x / BGE `bge-small-zh-v1.5`（本地）/ DeepSeek / JWT + bcrypt /
-> Alembic / Docker Compose + Nginx / pytest（118 个用例，含真实 MySQL、Redis 与真实向量模型）
+> Alembic / Docker Compose + Nginx / pytest（138 个用例，含真实 MySQL、Redis 与真实向量模型）
 
 > ⚠️ **本文档的每一条回答都对照当前代码校验过。**
 > 如果你改动了实现（例如换了向量库、调整了 `k` 或阈值、加了限流），
@@ -17,7 +17,7 @@
 
 一个综合 B2C 在线商城，特色是内置了基于 LangChain + RAG 的 AI 智能客服。三个端：
 
-- **商城前台**（Vue3，:5173）：商品浏览/搜索/筛选、多规格 SKU 加购、下单、页面化收银台、订单与退款、收藏、地址、AI 客服；
+- **商城前台**（Vue3，:5173）：商品浏览/搜索（含输入即补全）/筛选、多规格 SKU 加购、下单、页面化收银台、订单与退款、收藏、地址、AI 客服；
 - **管理后台**（Vue3，:5174，生产构建到 `/admin/`）：数据看板、商品与 SKU、分类、订单与退款审核、用户、Banner、知识库、RAG 评测；
 - **后端**（FastAPI，:8000）：REST + SSE。
 
@@ -51,7 +51,7 @@
 
 `api/` 只做参数校验、调用 service、返回结果；`services/` 承载业务规则（下单、库存扣减、状态流转、索引同步）；`models/` 是 SQLAlchemy 模型；`schemas/` 是 DTO；`core/` 放配置、DB、安全、依赖、后台任务。
 
-好处：接口薄、逻辑可复用（前台与后台共用 `order_service`）、可测试。**这也是能写出 118 个测试的前提**——业务逻辑不依赖 FastAPI 的请求对象。
+好处：接口薄、逻辑可复用（前台与后台共用 `order_service`）、可测试。**这也是能写出 138 个测试的前提**——业务逻辑不依赖 FastAPI 的请求对象。
 
 ### 5. 你的具体贡献
 
@@ -110,6 +110,33 @@
 - 排序：`sort_by` 走**白名单**（created_at/price/sales/stock），防止任意字段排序；
 - 分页：`offset/limit`，`page_size` 用 `Query(ge=1, le=100)` 限制上限；
 - 关联加载：`selectinload(Product.skus)` 与 `selectinload(Product.category)`，避免 N+1（category 这处原来是漏的，审计时补上的）。
+
+### 9b. 搜索自动补全（输入即提示）
+
+**和检索共用查询理解，但排序目标完全不同**，所以刻意分成两个函数而不是一个：
+
+| | `search()` 检索 | `suggest()` 补全 |
+|---|---|---|
+| 目标 | 找**全** | 帮用户**把词打完** |
+| 排序 | 命中数 / 相关度 | 前缀命中 > 中段命中 > 同义词命中（三档 rank） |
+| 候选量 | 全表匹配 | 只取最近更新的 200 条候选就够 |
+
+同档 rank 内再按「类型加权（商品 < 分类 < SKU）+ 短词优先」。`GET /api/products/suggest?q=`
+限流单独一档（默认 120 次/分钟，比其它接口宽——它是每敲一个字就可能发一次）。
+
+两个坑值得讲：
+
+1. **`/suggest` 必须注册在 `/{product_id}` 之前**。FastAPI 按注册顺序匹配，
+   写在后面就会被当成路径参数抢走，然后因为「suggest 不是整数」返回 422。
+   表现是「接口报错」而不是「结果不对」，很容易误判成参数类型问题。
+2. **为去噪加的 `len(term) >= 2` 过滤是错的**：中文单字同义词（鞋/帽/袜/裤/裙）全被它
+   过滤掉，「鞋子」直接 0 候选。**噪音该靠排序解决，不该靠过滤解决**——加上过滤会
+   静默吃掉一整类合法查询，而且只在特定词上暴露。
+
+前端（`components/SearchBox.vue`）：防抖 180ms、**请求序号防竞态**（慢响应不覆盖新结果）、
+blur 延时 120ms 关闭以让点击生效、上下键 + Enter + Esc、高亮用「先切片再各自转义」
+而不是拼接后整段 `v-html`（避免 XSS）。9 个后端用例 + 5 个 e2e（含「无匹配时给出提示而
+不是空白下拉」和「Esc 关闭」）。
 
 ### 10. 图片上传
 
@@ -427,7 +454,7 @@ Pinia setup store；后台大量使用 Element Plus 的表格/表单/弹窗/消�
 
 ### 37b. 前端有测试吗 / 前端代码怎么保证质量
 
-有，而且是**分层**的，两层管的是完全不同的东西（前端一共 24 个 vitest 单测 + 11 个 e2e）：
+有，而且是**分层**的，两层管的是完全不同的东西（前端一共 24 个 vitest 单测 + 18 个 e2e）：
 
 **单测（vitest + jsdom）测「纯逻辑」**，重点是两块最容易坏、又最难手工复现的逻辑：
 
@@ -470,10 +497,10 @@ Pinia setup store；后台大量使用 Element Plus 的表格/表单/弹窗/消�
 
 ## 七、测试、CI 与部署
 
-### 38. 测试怎么做的（118 个后端 + 24 个前端单测 + 11 个 e2e）
+### 38. 测试怎么做的（138 个后端 + 24 个前端单测 + 18 个 e2e）
 
-前端的 24 个 vitest 单测与 11 个 Playwright e2e 见 Q37b/Q37c（它们测的是和
-后端完全不同的东西）。后端 118 个用例的分工：
+前端的 24 个 vitest 单测与 18 个 Playwright e2e 见 Q37b/Q37c（它们测的是和
+后端完全不同的东西）。后端 138 个用例的分工：
 
 | 文件 | 覆盖 |
 |---|---|
@@ -489,7 +516,7 @@ Pinia setup store；后台大量使用 Element Plus 的表格/表单/弹窗/消�
 | `test_mysql_integration.py` | **真实 MySQL/InnoDB**：外键、并发防超卖、并发支付幂等（连不上时自动 skip） |
 | `test_redis_features.py` | **真实 Redis**：缓存读写与失效、限流 429、分布式锁互斥（连不上时自动 skip） |
 
-工程要点：默认 100 个用例完全自包含——每个用例一个独立 SQLite 文件、覆盖 `get_db` 依赖、
+工程要点：默认 118 个用例完全自包含——每个用例一个独立 SQLite 文件、覆盖 `get_db` 依赖、
 假 Embedding（确定性哈希向量），**不需要 MySQL 也不需要联网**，所以 CI 跑得很快。
 需要真实数据库/模型的用例用 marker 标注并自动 skip，不会让 CI 变红。
 
@@ -519,7 +546,7 @@ Pinia setup store；后台大量使用 Element Plus 的表格/表单/弹窗/消�
 
 ### 39. CI 做了什么
 
-GitHub Actions，五个 job：
+GitHub Actions，七个 job：
 
 - **backend**：`ruff check` → `pytest --cov=app --cov-fail-under=70`（覆盖率是门槛，不是装饰）
   → `python -c "from app.main import app"` 冒烟（确认应用能正常导入）；
@@ -530,16 +557,19 @@ GitHub Actions，五个 job：
   ——否则 host/口令配错时会得到一个绿色的假通过；
 - **rag-quality**：**手动触发**（`workflow_dispatch`）才跑 `pytest -m rag_quality`。
   它要下载约 100MB 的 BGE 模型，放进每次 push 的流水线会又慢又容易因网络抖动变红；
+- **security**：跑 `scripts/security-audit.sh`，基线之外出现新漏洞就让流水线失败；
 - **frontend**：`frontend` / `admin` 矩阵，`npm ci` + `npm run lint` + **`npm run test:unit`**
   （vitest）+ `vite build`。单测那一步用 `hashFiles` 判断有没有 vitest 配置，
   admin 还没接单测时不会报「找不到脚本」；
-- **e2e**：起 MySQL + Redis + API + 两个前端，再跑 **11 个 Playwright 用例**
-  （8 个桌面 + 3 个 375px 移动端）。这条原来只在我本地手动跑，等于没在保护仓库；
+- **docker**：`bash -n` 校验全部部署脚本语法，再把三层 compose 的合并结果 `config -q`
+  过一遍，并用坏配置做**反向验证**（断言它必须被拒绝）；
+- **e2e**：起 MySQL + Redis + API + 两个前端，再跑 **18 个 Playwright 用例**
+  （13 个桌面 + 3 个 375px 移动端 + 2 个后台）。这条原来只在我本地手动跑，等于没在保护仓库；
   现在每次 push 都会真开一个浏览器点一遍。
   它用 `RATE_LIMIT_API=0` 关掉全站限流、`SEED_SKIP_VECTOR=1` 跳过 100MB 模型下载，
   两个都是为了「别把被测对象本身的保护机制和重量算进 E2E」。
 
-因为默认那 100 个用例跑在 SQLite + 假向量上，backend job **不需要 MySQL、也不下载
+因为默认那 118 个用例跑在 SQLite + 假向量上，backend job **不需要 MySQL、也不下载
 100MB 模型**，所以跑得很快；需要真实数据库/模型的用例各自由上面两个独立 job 负责。
 
 ruff 刻意只开 `F`（如 F821 undefined-name）和 `E9`：**只拦「一定是 bug」的规则、不引风格
@@ -637,9 +667,10 @@ Docker 网段，并且由 `check-env.sh` 在启动**前**断言——但这是"�
 
 **第三方依赖的漏洞**：这是之前真正被漏掉的一块。扩展名白名单、魔数校验、
 密钥 fail-fast、限流——这些安全措施全都是针对**自己写的代码**，而**依赖**里的
-已知漏洞没有任何自动化检查。后来接入 `pip-audit` 一跑，扫出 39 条（11 个包）。
+已知漏洞没有任何自动化检查。后来接入 `pip-audit` 一跑，扫出 39 条（11 个包），
+治理到现在的 23 条 / 7 个包。
 
-处理方式是**基线模式**而不是全量卡死：一条 39 处红叉、长期没人处理的检查，
+处理方式是**基线模式**而不是全量卡死：一条 23 处红叉、长期没人处理的检查，
 唯一的效果是让大家习惯性忽略它。现在基线之外出现新漏洞立即失败，
 存量漏洞集中登记在 `scripts/BASELINE.md` 里逐条说明为什么不升、什么时候必须升。
 其中 `starlette` 是被 FastAPI 0.115 的版本约束卡住的（升它要跨大版本升框架）。
@@ -709,7 +740,7 @@ JSON 并带 request_id、也暴露了 Prometheus 指标，配了 9 条告警规�
   且评测跑的是生产同一条代码路径；另有四个实测得出的负向结论（BGE 前缀有害、
   BM25Okapi 的 IDF 会变负、模型缓存命名撞车、简单评测集会虚高分数）；
 - **并发正确性经过真实数据库验证**：8 线程抢 3 件恰好成交 3 单、5 次并发支付恰好成功 1 次，失败原因被严格限定为业务错误；
-- **工程化**：分层架构、依赖注入、Alembic 幂等迁移（可回滚）、多阶段非 root 镜像、Compose + Nginx、118 个测试（覆盖率 77%）、CI；
+- **工程化**：分层架构、依赖注入、Alembic 幂等迁移（可回滚）、多阶段非 root 镜像、Compose + Nginx、138 个测试（覆盖率 77%）、CI；
 - **清楚边界**：知道上线还差什么、瓶颈在哪、怎么扩展。
 
 ### 45. 如果流量上来先瓶颈在哪

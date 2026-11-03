@@ -17,8 +17,8 @@
 - **检索效果可量化**：自建 22 篇知识文档 + **51 条评测集**，在同一套评测、同一条线上
   代码路径上测出三级提升：纯向量 recall@1 84.3% → BM25 混合检索 90.2% →
   加交叉编码器重排 **92.2%，且 recall@3 达到 100%**。
-- **工程化**：118 个 pytest 用例（覆盖率 77%）+ 24 个前端 vitest 单测 +
-  11 个 Playwright 端到端用例（真浏览器、断言控制台零报错、含移动端视口）；
+- **工程化**：138 个 pytest 用例（覆盖率 77%）+ 24 个前端 vitest 单测 +
+  18 个 Playwright 端到端用例（真浏览器、断言控制台零报错、含移动端视口）；
   Alembic 迁移**可回滚**（有真实 MySQL 往返用例）；
   GitHub Actions 一条流水线跑完全部检查。
 - **移动端可用**：全站响应式（自适应网格 + 媒体查询），375px 视口下有专门的
@@ -52,6 +52,14 @@
 |---|---|
 | ![后台看板](docs/screenshots/admin-dashboard.png) | ![后台登录](docs/screenshots/admin-login.png) |
 
+| 搜索结果 | 搜索自动补全 |
+|---|---|
+| ![搜索结果](docs/screenshots/mall-search.png) | ![搜索补全](docs/screenshots/mall-search-suggest.png) |
+
+| 移动端首页（375px） | 移动端 AI 客服（375px） |
+|---|---|
+| ![移动端首页](docs/screenshots/mobile-home.png) | ![移动端客服](docs/screenshots/mobile-ai-chat.png) |
+
 > 截图由 `npm run test:e2e` 的 Playwright 用例自动产出，所以不会随界面改动而过期。
 
 ## 技术栈
@@ -76,6 +84,8 @@
 
 - 首页：Banner 运营位（后台可管理）+ 分类导航 + 热销推荐
 - 商品：多规格 SKU（独立价格/库存）、收藏、详情图
+- 搜索：查询理解分层（形式归一化 / jieba 分词 / 同义词表）+ 相关度排序 + **输入即补全**
+  （防抖 + 请求序号防竞态 + 键盘上下键导航，拼音/中文单字都能命中）
 - 购物车 / 下单 / 页面化模拟收银台（30 分钟未支付自动关单并回补库存）
 - 订单：取消、确认收货、申请退款（审核流转 + 库存销量回滚）
 - 用户：注册登录、地址管理、我的订单、我的收藏
@@ -253,8 +263,8 @@ bash deploy/rollback.sh --latest --dry-run   # 先看会做什么
 
 ```bash
 cd backend && pip install -r requirements-dev.txt
-pytest                                    # 100 个自包含用例：不需要 MySQL / Redis / 联网
-pytest -m "mysql or redis" -v             # 18 个集成用例：真实 MySQL 与 Redis
+pytest                                    # 138 个用例，其中 118 个不需要 MySQL / Redis / 联网
+pytest -m "mysql or redis" -v             # 20 个集成用例：真实 MySQL 与 Redis
 pytest --cov=app --cov-report=term-missing
 ruff check .                              # 静态检查
 
@@ -302,7 +312,7 @@ CI 里有一个独立的 `e2e` 任务跑这套用例（起 MySQL + Redis + API +
 │  ├─ app/ai            # RAG 链路（retriever / reranker / rag / indexer）
 │  ├─ app/core          # 配置/安全/缓存/限流/锁/日志/指标/后台任务/商品目录
 │  ├─ alembic           # 数据库迁移
-│  ├─ tests             # 118 个 pytest 用例
+│  ├─ tests             # 138 个 pytest 用例
 │  ├─ loadtest/         # Locust 压测脚本
 │  └─ static/products/  # 商品图（文件名 = 商品 slug）
 ├─ deploy/              # 部署脚本、配置校验、部署自检、备份与回滚、Caddyfile

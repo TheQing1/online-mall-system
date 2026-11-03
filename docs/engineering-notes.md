@@ -81,7 +81,7 @@ sh deploy/smoke.sh                         # 有域名改成 BASE_URL=https://�
 （有真实 MySQL 的 upgrade→downgrade→upgrade 往返用例守着）；上传补了**文件头（魔数）校验**，
 改个后缀传脚本会被拒；限流从「只有三个接口」变成**全站兜底 + 分接口配额**；
 缓存补了**击穿 / 穿透 / 雪崩**三道防护；加了 **6 条告警规则 + Grafana 看板**；
-10 个端到端用例**进了 CI**。
+18 个端到端用例**进了 CI**。
 
 **部署链路**：`deploy/bootstrap.sh` 一条命令从裸机到可访问（含装 Docker、生成随机密钥、
 预热模型）；`deploy/check-env.sh` 把「漏配但照样能跑起来」的配置挡在启动前；
@@ -233,8 +233,9 @@ README 里那张表要这样读：**吞吐几乎没变，但延迟（尤其尾�
 ## 六、前端产物体积优化的代价
 
 Element Plus 改成按需引入后（`unplugin-vue-components` + `ElementPlusResolver`），
-两个前端的 `dist` 从 1579KB / 1600KB 降到 **762KB / 797KB**，
-主 chunk 从 777KB / 1167KB 降到 103KB / 517KB。
+两个前端的 `dist` 从 1579KB / 1600KB 降到 **798KB / 816KB**（数字于 2026-11 重新实测；
+Vite 8 换用 rolldown 后拆包策略变了，所以「主 chunk」不再是一个可比的单一数字，
+两个入口 chunk 现在是 64KB / 523KB）。
 
 代价是三个地方要自己处理：服务式组件（`ElMessage`/`ElMessageBox`）与指令（`v-loading`）
 不走模板解析、插件管不到，样式要显式引；中文 locale 也要从
