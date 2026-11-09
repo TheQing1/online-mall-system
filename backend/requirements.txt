@@ -1,8 +1,8 @@
 fastapi==0.115.0
-uvicorn[standard]==0.30.0
-sqlalchemy==2.0.35
-pymysql==1.1.1
-alembic==1.13.0
+uvicorn[standard]==0.54.0
+sqlalchemy==2.0.57
+pymysql==1.2.3
+alembic==1.20.1
 # JWT：从 python-jose 换成 PyJWT。
 # python-jose 3.3.0 有 4 条已知 CVE（算法混淆 / 解压型 DoS），而它承担全部认证，
 # 是项目里风险最高的依赖。全仓只有 app/core/security.py 用到它，且只用到
